@@ -1,0 +1,38 @@
+cmake_minimum_required(VERSION 3.25)
+project(infer VERSION 0.1.0 LANGUAGES CXX)
+
+set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+
+option(INFER_ENABLE_CUDA "Build the CUDA kernels and GPU tests" ON)
+option(INFER_BUILD_TESTS "Build tests" ON)
+
+# CI runners have no CUDA toolkit, so the GPU side is skipped there and only the CPU-side
+# targets are built.
+if(INFER_ENABLE_CUDA)
+  include(CheckLanguage)
+  check_language(CUDA)
+  if(CMAKE_CUDA_COMPILER)
+    # Build for the GPU in this machine unless an architecture is given explicitly.
+    if(NOT DEFINED CMAKE_CUDA_ARCHITECTURES)
+      set(CMAKE_CUDA_ARCHITECTURES native)
+    endif()
+    enable_language(CUDA)
+    set(CMAKE_CUDA_STANDARD 20)
+    set(CMAKE_CUDA_STANDARD_REQUIRED ON)
+  else()
+    message(STATUS "No CUDA compiler found, building CPU-side targets only")
+    set(INFER_ENABLE_CUDA OFF)
+  endif()
+endif()
+
+# Warning flags for our own targets only (not third-party code).
+add_library(infer_options INTERFACE)
+target_compile_options(infer_options INTERFACE
+  $<$<COMPILE_LANGUAGE:CXX>:-Wall -Wextra -Wpedantic -Wshadow -Wconversion -Werror>)
+
+if(INFER_BUILD_TESTS)
+  enable_testing()
+endif()

@@ -1,0 +1,33 @@
+# Build output
+build/
+compile_commands.json
+CMakeUserPresets.json
+
+# Private notes and agent context (kept local, backed up outside the repo)
+INTERVIEW.md
+AGENTS.md
+CLAUDE.md
+.claude/
+
+# Model weights and tokenizer files (downloaded, never committed)
+models/
+*.safetensors
+*.gguf
+
+# Profiler reports
+*.ncu-rep
+*.nsys-rep
+*.qdrep
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+
+# Editors / OS
+.vscode/
+.idea/
+.vs/
+*.swp
+.DS_Store
+Thumbs.db
