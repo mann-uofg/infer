@@ -33,6 +33,13 @@ add_library(infer_options INTERFACE)
 target_compile_options(infer_options INTERFACE
   $<$<COMPILE_LANGUAGE:CXX>:-Wall -Wextra -Wpedantic -Wshadow -Wconversion -Werror>)
 
+if(INFER_ENABLE_CUDA)
+  find_package(CUDAToolkit REQUIRED)
+
+  add_executable(device_info tools/device_info.cpp)
+  target_link_libraries(device_info PRIVATE infer_options CUDA::cudart)
+endif()
+
 if(INFER_BUILD_TESTS)
   enable_testing()
 endif()
