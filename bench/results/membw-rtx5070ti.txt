@@ -1,0 +1,102 @@
+date          2026-10-12
+driver        617.42
+toolkit       release 13.3, V13.3.73
+host          WSL2 6.18.40.1-microsoft-standard-WSL2, Ubuntu 24.04.5 LTS
+gpu state     40, 29.60 W, 1811 MiB (before run; desktop apps were running on the same GPU)
+
+--- run 1
+device        NVIDIA GeForce RTX 5070 Ti (70 SMs, L2 48 MiB, bus 256 bits)
+buffer        2048 MiB, 20 timed runs after 5 warmups
+
+test        threads     median        min        max
+                          GB/s       GB/s       GB/s
+read          17920      718.4      711.9      727.2
+write         17920      798.2      758.3      832.9
+copy          17920      738.9      689.8      743.4
+read          35840      845.9      834.8      855.0
+write         35840      795.5      763.1      834.0
+copy          35840      746.2      741.5      751.0
+read          71680      851.6      840.6      862.0
+write         71680      782.9      745.3      830.2
+copy          71680      753.6      748.4      759.0
+read         143360      839.8      829.8      849.2
+write        143360      772.9      736.1      822.5
+copy         143360      748.0      719.8      752.1
+read         286720      840.1      817.8      855.1
+write        286720      770.3      738.9      815.4
+copy         286720      751.8      746.7      757.4
+read         573440      839.1      831.4      848.1
+write        573440      782.5      735.4      820.1
+copy         573440      750.7      747.3      755.2
+read        1146880      842.0      830.5      853.9
+write       1146880      786.5      747.1      827.0
+copy        1146880      754.8      746.7      759.5
+memset            -      801.8      769.3      840.2
+memcpy            -      769.8      699.1      776.4
+
+best median   read 851.6 GB/s, write 798.2 GB/s, copy 754.8 GB/s
+
+--- run 2
+device        NVIDIA GeForce RTX 5070 Ti (70 SMs, L2 48 MiB, bus 256 bits)
+buffer        2048 MiB, 20 timed runs after 5 warmups
+
+test        threads     median        min        max
+                          GB/s       GB/s       GB/s
+read          17920      722.0      720.5      727.9
+write         17920      817.1      768.2      837.0
+copy          17920      743.9      736.7      749.1
+read          35840      851.5      843.1      855.6
+write         35840      816.5      770.8      835.6
+copy          35840      751.3      747.4      757.3
+read          71680      851.3      788.5      862.3
+write         71680      814.9      759.6      828.8
+copy          71680      759.1      755.7      765.0
+read         143360      846.3      839.0      852.6
+write        143360      800.2      753.4      825.8
+copy         143360      752.4      681.3      759.2
+read         286720      752.3      673.5      858.1
+write        286720      714.6      533.0      827.4
+copy         286720      699.5      645.4      721.8
+read         573440      844.1      638.7      855.2
+write        573440      745.1      608.8      824.8
+copy         573440      703.9      641.5      721.4
+read        1146880      836.9      639.8      855.0
+write       1146880      804.0      682.8      826.3
+copy        1146880      737.3      662.5      766.3
+memset            -      794.8      757.5      836.0
+memcpy            -      749.0      741.1      774.8
+
+best median   read 851.5 GB/s, write 817.1 GB/s, copy 759.1 GB/s
+
+--- run 3
+device        NVIDIA GeForce RTX 5070 Ti (70 SMs, L2 48 MiB, bus 256 bits)
+buffer        2048 MiB, 20 timed runs after 5 warmups
+
+test        threads     median        min        max
+                          GB/s       GB/s       GB/s
+read          17920      687.5      674.4      727.8
+write         17920      818.7      768.7      832.3
+copy          17920      728.3      722.2      729.7
+read          35840      848.7      788.4      856.2
+write         35840      816.5      754.9      832.2
+copy          35840      735.2      733.5      756.5
+read          71680      835.8      782.3      862.7
+write         71680      808.0      736.4      821.9
+copy          71680      739.1      737.0      767.0
+read         143360      849.0      774.9      852.1
+write        143360      802.2      730.3      821.5
+copy         143360      732.3      707.3      760.5
+read         286720      840.9      769.4      853.1
+write        286720      783.2      736.5      819.5
+copy         286720      732.8      728.1      758.9
+read         573440      846.0      770.2      852.2
+write        573440      799.0      742.0      826.4
+copy         573440      735.0      712.5      737.9
+read        1146880      847.5      775.0      855.5
+write       1146880      809.6      751.6      826.9
+copy        1146880      738.3      727.9      765.9
+memset            -      819.0      758.9      835.2
+memcpy            -      748.2      721.6      776.2
+
+best median   read 849.0 GB/s, write 818.7 GB/s, copy 739.1 GB/s
+
