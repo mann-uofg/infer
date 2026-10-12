@@ -38,6 +38,8 @@ if(INFER_ENABLE_CUDA)
 
   add_executable(device_info tools/device_info.cpp)
   target_link_libraries(device_info PRIVATE infer_options CUDA::cudart)
+
+  add_executable(membw bench/membw.cu)
 endif()
 
 if(INFER_BUILD_TESTS)
