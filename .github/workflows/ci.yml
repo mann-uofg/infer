@@ -1,0 +1,40 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+# The workflow only reads the repository; it needs no other access.
+permissions:
+  contents: read
+
+jobs:
+  # Hosted runners have no GPU or CUDA toolkit, so this covers the CPU-side code only.
+  # GPU tests run locally.
+  build-test:
+    name: ${{ matrix.cxx }} / ${{ matrix.preset }}
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        cxx: [g++, clang++]
+        preset: [debug, release]
+    env:
+      CXX: ${{ matrix.cxx }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+      - name: Install Ninja
+        run: sudo apt-get update && sudo apt-get install -y ninja-build
+      - name: Configure
+        run: cmake --preset ${{ matrix.preset }}
+      - name: Build
+        run: cmake --build --preset ${{ matrix.preset }}
+      - name: Test
+        run: ctest --preset ${{ matrix.preset }}
+
+  format:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+      - name: clang-format check
+        run: git ls-files '*.h' '*.cpp' '*.cu' '*.cuh' | xargs -r clang-format --dry-run --Werror
