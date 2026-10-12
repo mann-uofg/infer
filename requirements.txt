@@ -1,0 +1,8 @@
+# Python side: the PyTorch reference forward pass, the comparison harness against
+# Hugging Face transformers, and model download and tokenizer glue.
+torch==2.14.1
+transformers==5.19.0
+safetensors==0.8.0
+huggingface_hub==2.2.0
+numpy==2.5.4
+pytest==9.1.1
