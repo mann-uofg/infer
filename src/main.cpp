@@ -26,6 +26,8 @@ struct Args {
   int generate = 0;
   std::string dump;
   int max_tokens = 0;
+  std::string backend = "optimized";
+  bool graph = true;
 };
 
 [[noreturn]] void Usage() {
@@ -59,6 +61,10 @@ Args ParseArgs(int argc, char** argv) {
       a.generate = std::stoi(value);
     } else if (flag == "--dump") {
       a.dump = value;
+    } else if (flag == "--backend") {
+      a.backend = value;
+    } else if (flag == "--graph") {
+      a.graph = value != "off";
     } else if (flag == "--max-tokens") {
       a.max_tokens = std::stoi(value);
     } else {
@@ -97,6 +103,8 @@ int main(int argc, char** argv) {
     infer::EngineOptions opt;
     opt.max_seq = args.max_tokens > 0 ? args.max_tokens : needed;
     opt.max_logit_rows = args.dump.empty() ? 1 : static_cast<int>(args.tokens.size());
+    opt.backend = infer::ParseBackend(args.backend);
+    opt.cuda_graph = args.graph;
     infer::Engine engine(cfg, weights, opt);
 
     if (!args.dump.empty()) {

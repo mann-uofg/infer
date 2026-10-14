@@ -48,18 +48,32 @@ def model(request):
     return d, Llama(d, device="cuda", kv_dtype=torch.bfloat16), TOLERANCE[request.param]
 
 
+# Engine configurations under test: the naive baseline, the optimized decode path run
+# eagerly, and the same path replayed as a CUDA graph (the default).
+BACKENDS = {
+    "naive": ("--backend", "naive"),
+    "optimized": ("--backend", "optimized", "--graph", "off"),
+    "optimized-graph": ("--backend", "optimized", "--graph", "on"),
+}
+
+
+@pytest.fixture(params=list(BACKENDS))
+def backend(request):
+    return BACKENDS[request.param]
+
+
 def relative_error(got: np.ndarray, want: np.ndarray) -> float:
     return float(np.abs(got - want).max() / np.abs(want).max())
 
 
-def test_layer_by_layer(model):
+def test_layer_by_layer(model, backend):
     d, ref, tol = model
     cfg = ref.cfg
     tokens = random_tokens(cfg.vocab_size, 23, seed=10)
     want_logits, want_hidden = ref.forward(tokens, return_hidden=True)
     want_logits = want_logits.cpu().numpy()
     hidden, logits, decode_logits = engine_dump(
-        d, tokens, cfg.num_layers, cfg.hidden_size, cfg.vocab_size
+        d, tokens, cfg.num_layers, cfg.hidden_size, cfg.vocab_size, *backend
     )
 
     # Both sides compute in fp32 from the same bf16 weights and round K/V to bf16; they differ
@@ -77,7 +91,7 @@ def test_layer_by_layer(model):
     assert (decode_logits.argmax(-1) == want_logits.argmax(-1)).all()
 
 
-def test_greedy_generation_matches_reference(model):
+def test_greedy_generation_matches_reference(model, backend):
     d, ref, _ = model
     prompt = random_tokens(ref.cfg.vocab_size, 7, seed=11)
-    assert engine_generate(d, prompt, 24) == ref.generate_greedy(prompt, 24)
+    assert engine_generate(d, prompt, 24, *backend) == ref.generate_greedy(prompt, 24)
