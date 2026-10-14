@@ -49,6 +49,7 @@ struct Args {
   std::string json;
   std::string label;
   bool profile_step = false;
+  infer::Sampling sampling;
 };
 
 [[noreturn]] void Usage() {
@@ -93,6 +94,12 @@ Args ParseArgs(int argc, char** argv) {
       a.backend = v;
     } else if (flag == "--graph") {
       a.graph = v != "off";
+    } else if (flag == "--temperature") {
+      a.sampling.temperature = std::stof(v);
+    } else if (flag == "--top-k") {
+      a.sampling.top_k = std::stoi(v);
+    } else if (flag == "--top-p") {
+      a.sampling.top_p = std::stof(v);
     } else if (flag == "--json") {
       a.json = v;
     } else if (flag == "--label") {
@@ -189,7 +196,8 @@ int main(int argc, char** argv) {
       for (int run = 0; run < args.warmup + args.runs; ++run) {
         engine.Reset();
         const double p = TimeMs(engine.stream(), [&] { engine.Prefill(prompt); });
-        const double d = TimeMs(engine.stream(), [&] { engine.DecodeGreedy(args.generate); });
+        const double d =
+            TimeMs(engine.stream(), [&] { engine.DecodeSampled(args.generate, args.sampling); });
         if (run >= args.warmup) {
           prefill_ms.push_back(p);
           decode_ms.push_back(d);

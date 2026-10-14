@@ -294,6 +294,35 @@ void BenchSmallOps(Runner& r) {
     r.Report("swiglu I=8192", "naive", 4.0 * 3 * I,
              TimeUs([&](int i, cudaStream_t st) { k::SwiGlu(gu.get(i), 1, I, out.get(), st); }));
   }
+  if (r.Wanted("sample")) {
+    Rotation<float> logits(V, CopiesFor(4ull * V), 12);
+    Rotation<float> u(2, 2, 13);
+    DeviceBuffer<int> pos(1);
+    CUDA_CHECK(cudaMemset(pos.get(), 0, sizeof(int)));
+    DeviceBuffer<int> tok(1);
+    DeviceBuffer<int> hist(1);
+    struct S {
+      const char* name;
+      float t;
+      int k;
+      float p;
+    };
+    for (const S& s : {S{"sample T=0.6 p=0.9", 0.6f, 0, 0.9f}, S{"sample T=1 k=40", 1.0f, 40, 1.0f},
+                       S{"sample T=1 k=40 p=0.95", 1.0f, 40, 0.95f}}) {
+      r.Report(s.name, "radix", 4.0 * V, TimeUs([&](int i, cudaStream_t st) {
+                 k::Sample(logits.get(i), V, s.t, s.k, s.p, u.get(0), pos.get(), tok.get(),
+                           hist.get(), st);
+               }));
+    }
+  }
+  if (r.Wanted("argmax")) {
+    DeviceBuffer<unsigned long long> best(1);
+    CUDA_CHECK(cudaMemset(best.get(), 0, sizeof(unsigned long long)));
+    Rotation<float> lg(V, CopiesFor(4ull * V), 14);
+    r.Report("argmax V=128256", "multiblock", 4.0 * V, TimeUs([&](int i, cudaStream_t st) {
+               k::ArgmaxPartial(lg.get(i), V, best.get(), st);
+             }));
+  }
   if (r.Wanted("argmax")) {
     Rotation<float> logits(V, CopiesFor(4ull * V), 11);
     DeviceBuffer<int> out(1);
