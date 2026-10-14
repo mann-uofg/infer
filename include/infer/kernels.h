@@ -39,11 +39,19 @@ void MatmulNaive(const float* x, const bf16* W, int T, int N, int K, float* y, b
 void RopeNaive(float* qkv, int T, int num_heads, int num_kv_heads, int head_dim,
                const float* inv_freq, int pos0, cudaStream_t stream);
 
-// Causal grouped-query attention over a whole sequence, reading q, k and v from the fused
-// qkv buffer [T, qkv_dim]. out is [T, num_heads * head_dim].
-// Naive: one thread per (token, head), two passes over the keys.
-void AttentionNaive(const float* qkv, int T, int num_heads, int num_kv_heads, int head_dim,
-                    float* out, cudaStream_t stream);
+// Copies the k and v parts of each qkv row (after RoPE) into the cache as bf16. Row t is
+// position pos0 + t. Cache layout per layer: [num_kv_heads, max_seq, head_dim], so the keys of
+// one head are contiguous in position order.
+void KvCacheWrite(const float* qkv, int T, int num_heads, int num_kv_heads, int head_dim, int pos0,
+                  int max_seq, bf16* k_cache, bf16* v_cache, cudaStream_t stream);
+
+// Causal grouped-query attention for T queries at positions pos0..pos0+T-1, against the cache
+// (which must already hold positions 0..pos0+T-1). q is read from the qkv buffer
+// [T, qkv_dim]; out is [T, num_heads * head_dim].
+// Naive: one thread per (query, head), two passes over the keys.
+void AttentionNaive(const float* qkv, int T, int pos0, int num_heads, int num_kv_heads,
+                    int head_dim, const bf16* k_cache, const bf16* v_cache, int max_seq, float* out,
+                    cudaStream_t stream);
 
 // out[t, i] = silu(gate_up[t, i]) * gate_up[t, I + i]
 void SwiGlu(const float* gate_up, int T, int I, float* out, cudaStream_t stream);

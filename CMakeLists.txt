@@ -51,7 +51,7 @@ if(INFER_ENABLE_CUDA)
     src/kernels/naive.cu
     src/model.cpp
   )
-  target_link_libraries(infer_cuda PUBLIC infer_host CUDA::cudart PRIVATE infer_options)
+  target_link_libraries(infer_cuda PUBLIC infer_host CUDA::cudart PRIVATE CUDA::nvtx3 infer_options)
 
   add_executable(infer src/main.cpp)
   target_link_libraries(infer PRIVATE infer_cuda infer_options)
@@ -60,6 +60,7 @@ if(INFER_ENABLE_CUDA)
   target_link_libraries(device_info PRIVATE infer_options CUDA::cudart)
 
   add_executable(membw bench/membw.cu)
+
 endif()
 
 if(INFER_BUILD_TESTS)

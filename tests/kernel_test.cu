@@ -87,27 +87,65 @@ TEST(KernelTest, RopeNaive) {
   ExpectClose(Download(d_qkv), qkv, 1e-5f, 1e-5f);
 }
 
-class AttentionTest : public ::testing::TestWithParam<std::tuple<int, int, int, int>> {};
+// A KV cache holding `past` earlier positions plus T new ones, written by KvCacheWrite in two
+// calls (so the pos0 offset is exercised), and the expected attention output for the T new
+// queries. Shared by the naive and optimized attention tests.
+struct AttentionCase {
+  int T, past, nh, nkv, hd, max_seq, stride;
+  DeviceBuffer<float> d_all;  // qkv rows for all past + T positions
+  DeviceBuffer<bf16> k_cache, v_cache;
+  std::vector<float> want;
+
+  AttentionCase(int T_, int past_, int nh_, int nkv_, int hd_, uint32_t seed)
+      : T(T_),
+        past(past_),
+        nh(nh_),
+        nkv(nkv_),
+        hd(hd_),
+        max_seq(past_ + T_ + 5),
+        stride((nh_ + 2 * nkv_) * hd_) {
+    const int P = past + T;
+    const auto all = RandomFloats(static_cast<size_t>(P) * stride, 1.0f, seed);
+    d_all = Upload(all);
+    k_cache = DeviceBuffer<bf16>(static_cast<size_t>(nkv) * max_seq * hd);
+    v_cache = DeviceBuffer<bf16>(static_cast<size_t>(nkv) * max_seq * hd);
+    if (past > 0) {
+      kernels::KvCacheWrite(d_all.get(), past, nh, nkv, hd, 0, max_seq, k_cache.get(),
+                            v_cache.get(), nullptr);
+    }
+    kernels::KvCacheWrite(new_rows(), T, nh, nkv, hd, past, max_seq, k_cache.get(), v_cache.get(),
+                          nullptr);
+
+    // The kernel sees k and v rounded to bf16 by the cache; q stays fp32.
+    const auto rounded = RoundTripBf16(all);
+    const float* q = all.data() + static_cast<size_t>(past) * stride;
+    const float* k = rounded.data() + static_cast<size_t>(nh) * hd;
+    const float* v = k + static_cast<size_t>(nkv) * hd;
+    want = test::CpuAttention(q, stride, k, v, stride, T, past, nh, nkv, hd);
+  }
+
+  const float* new_rows() const { return d_all.get() + static_cast<size_t>(past) * stride; }
+};
+
+class AttentionTest : public ::testing::TestWithParam<std::tuple<int, int, int, int, int>> {};
 
 TEST_P(AttentionTest, Naive) {
-  const auto [T, nh, nkv, hd] = GetParam();
-  const int stride = (nh + 2 * nkv) * hd;
-  const auto qkv = RandomFloats(static_cast<size_t>(T) * stride, 1.0f, 7);
-  auto d_qkv = Upload(qkv);
+  const auto [T, past, nh, nkv, hd] = GetParam();
+  AttentionCase c(T, past, nh, nkv, hd, 7);
   DeviceBuffer<float> d_out(static_cast<size_t>(T) * nh * hd);
-  kernels::AttentionNaive(d_qkv.get(), T, nh, nkv, hd, d_out.get(), nullptr);
-  const float* q = qkv.data();
-  const float* k = q + nh * hd;
-  const float* v = k + nkv * hd;
-  const auto want = test::CpuAttention(q, stride, k, v, stride, T, 0, nh, nkv, hd);
-  ExpectClose(Download(d_out), want, 1e-5f, 1e-4f);
+  kernels::AttentionNaive(c.new_rows(), T, past, nh, nkv, hd, c.k_cache.get(), c.v_cache.get(),
+                          c.max_seq, d_out.get(), nullptr);
+  ExpectClose(Download(d_out), c.want, 1e-5f, 1e-4f);
 }
 
+// (T, past, num_heads, num_kv_heads, head_dim)
 INSTANTIATE_TEST_SUITE_P(Shapes, AttentionTest,
-                         ::testing::Values(std::make_tuple(1, 32, 8, 64),
-                                           std::make_tuple(37, 32, 8, 64),
-                                           std::make_tuple(130, 8, 2, 64),
-                                           std::make_tuple(20, 4, 4, 128)));
+                         ::testing::Values(std::make_tuple(1, 0, 32, 8, 64),    // first token
+                                           std::make_tuple(1, 300, 32, 8, 64),  // decode
+                                           std::make_tuple(37, 0, 32, 8, 64),   // prefill
+                                           std::make_tuple(17, 50, 8, 2, 64),   // chunked
+                                           std::make_tuple(130, 0, 8, 2, 64),
+                                           std::make_tuple(20, 3, 4, 4, 128)));
 
 TEST(KernelTest, SwiGlu) {
   const int T = 3, I = 1408;

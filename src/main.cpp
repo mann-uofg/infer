@@ -94,19 +94,37 @@ int main(int argc, char** argv) {
                  static_cast<double>(weights.device_bytes()) / 1e9, Seconds(t0, t1));
 
     const int needed = static_cast<int>(args.tokens.size()) + args.generate;
-    const int max_tokens = args.max_tokens > 0 ? args.max_tokens : needed;
-    infer::Engine engine(cfg, weights, max_tokens, infer::Backend::kNaive);
+    infer::EngineOptions opt;
+    opt.max_seq = args.max_tokens > 0 ? args.max_tokens : needed;
+    opt.max_logit_rows = args.dump.empty() ? 1 : static_cast<int>(args.tokens.size());
+    infer::Engine engine(cfg, weights, opt);
 
     if (!args.dump.empty()) {
       std::filesystem::create_directories(args.dump);
       std::vector<std::vector<float>> hidden;
-      const std::vector<float> logits = engine.Forward(args.tokens, true, &hidden);
+      engine.Prefill(args.tokens, true, &hidden);
+      const std::vector<float> logits = engine.Logits(static_cast<int>(args.tokens.size()));
       for (size_t i = 0; i < hidden.size(); ++i) {
         char name[32];
         std::snprintf(name, sizeof(name), "hidden_%02zu.f32", i);
         WriteFloats(std::filesystem::path(args.dump) / name, hidden[i]);
       }
       WriteFloats(std::filesystem::path(args.dump) / "logits.f32", logits);
+
+      // The same sequence again through the decode path: one token at a time against the KV
+      // cache. Row t holds the logits after token t, so it must match row t above.
+      engine.Reset();
+      std::vector<float> decode_logits;
+      for (size_t t = 0; t < args.tokens.size(); ++t) {
+        if (t == 0) {
+          engine.Prefill({args.tokens[0]});
+        } else {
+          engine.Decode(args.tokens[t]);
+        }
+        const std::vector<float> row = engine.Logits(1);
+        decode_logits.insert(decode_logits.end(), row.begin(), row.end());
+      }
+      WriteFloats(std::filesystem::path(args.dump) / "decode_logits.f32", decode_logits);
     }
 
     if (args.generate > 0) {
