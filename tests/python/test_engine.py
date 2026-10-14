@@ -36,24 +36,47 @@ def random_tokens(vocab: int, n: int, seed: int) -> list[int]:
 #
 # The reference rounds K and V to bf16 like the engine's cache does. Rounding is a step
 # function, so where the two sides' fp32 values differ by an ulp next to a rounding boundary
-# they round to neighbouring bf16 values, 2^-8 apart. On the tiny model that never happens in
-# this test and the error is ~2e-6; on the 1B models it does and the error is ~1e-3 (measured;
-# without the bf16 emulation it is ~7e-3). An indexing bug gives errors of order 1.
-TOLERANCE = {"tiny": 1e-4, "random-1b": 3e-3, "llama-3.2-1b": 3e-3}
+# they round to neighbouring bf16 values, 2^-8 apart, and attention carries that forward. How
+# often that happens depends on the kernels' summation order. Measured: tiny model 2e-6 (naive)
+# to 1e-4 (optimized prefill); 1B models ~1e-3 for every backend and weight format (~7e-3
+# without the bf16 emulation). An indexing bug gives errors of order 1.
+TOLERANCE = {"tiny": 5e-4, "random-1b": 3e-3, "llama-3.2-1b": 3e-3}
+
+
+class References:
+    """Reference models for one checkpoint, one per weight format, built on first use (the
+    1B model in fp32 takes 5 GB of GPU memory, so only one is kept at a time)."""
+
+    def __init__(self, d):
+        self.d = d
+        self.fmt = None
+        self.ref = None
+
+    def get(self, fmt):
+        if fmt != self.fmt:
+            self.ref = None
+            torch.cuda.empty_cache()
+            self.ref = Llama(self.d, device="cuda", kv_dtype=torch.bfloat16, weights=fmt)
+            self.fmt = fmt
+        return self.ref
 
 
 @pytest.fixture(scope="module", params=["tiny", "random-1b", "llama-3.2-1b"])
 def model(request):
     d = model_dir(request.param)
-    return d, Llama(d, device="cuda", kv_dtype=torch.bfloat16), TOLERANCE[request.param]
+    return d, References(d), TOLERANCE[request.param]
 
 
-# Engine configurations under test: the naive baseline, the optimized decode path run
-# eagerly, and the same path replayed as a CUDA graph (the default).
+# Engine configurations under test: (weight format, engine flags). The naive baseline, the
+# optimized decode path run eagerly, the same path replayed as a CUDA graph (the default), and
+# the optimized path with quantized weights. Quantized runs are compared against a reference
+# that uses the same quantized weights, so they test the kernels, not the quantization error.
 BACKENDS = {
-    "naive": ("--backend", "naive"),
-    "optimized": ("--backend", "optimized", "--graph", "off"),
-    "optimized-graph": ("--backend", "optimized", "--graph", "on"),
+    "naive": ("bf16", ("--backend", "naive")),
+    "optimized": ("bf16", ("--backend", "optimized", "--graph", "off")),
+    "optimized-graph": ("bf16", ("--backend", "optimized", "--graph", "on")),
+    "int8": ("int8", ("--backend", "optimized", "--weights", "int8")),
+    "int4": ("int4", ("--backend", "optimized", "--weights", "int4")),
 }
 
 
@@ -67,13 +90,15 @@ def relative_error(got: np.ndarray, want: np.ndarray) -> float:
 
 
 def test_layer_by_layer(model, backend):
-    d, ref, tol = model
+    d, refs, tol = model
+    fmt, flags = backend
+    ref = refs.get(fmt)
     cfg = ref.cfg
     tokens = random_tokens(cfg.vocab_size, 23, seed=10)
     want_logits, want_hidden = ref.forward(tokens, return_hidden=True)
     want_logits = want_logits.cpu().numpy()
     hidden, logits, decode_logits = engine_dump(
-        d, tokens, cfg.num_layers, cfg.hidden_size, cfg.vocab_size, *backend
+        d, tokens, cfg.num_layers, cfg.hidden_size, cfg.vocab_size, *flags
     )
 
     # Both sides compute in fp32 from the same bf16 weights and round K/V to bf16; they differ
@@ -92,6 +117,8 @@ def test_layer_by_layer(model, backend):
 
 
 def test_greedy_generation_matches_reference(model, backend):
-    d, ref, _ = model
+    d, refs, _ = model
+    fmt, flags = backend
+    ref = refs.get(fmt)
     prompt = random_tokens(ref.cfg.vocab_size, 7, seed=11)
-    assert engine_generate(d, prompt, 24, *backend) == ref.generate_greedy(prompt, 24)
+    assert engine_generate(d, prompt, 24, *flags) == ref.generate_greedy(prompt, 24)
