@@ -32,8 +32,9 @@ work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 
 # --capture-range-end=stop lets the program exit normally; the default kills it (exit 143).
-nsys profile --trace=cuda,nvtx --capture-range=cudaProfilerApi --capture-range-end=stop \
-  --force-overwrite=true -o "$work/$label" "$bin" "${args[@]}" > "$work/nsys.log" 2>&1 || { cat "$work/nsys.log"; exit 1; }
+# --cuda-graph-trace=node reports the kernels inside a graph launch, not just the graph.
+nsys profile --trace=cuda,nvtx --cuda-graph-trace=node --capture-range=cudaProfilerApi \
+  --capture-range-end=stop --force-overwrite=true -o "$work/$label" "$bin" "${args[@]}" > "$work/nsys.log" 2>&1 || { cat "$work/nsys.log"; exit 1; }
 nsys stats --force-export=true --report cuda_gpu_kern_sum --format table \
   "$work/$label.nsys-rep" > "$out/$label-nsys.txt" 2> "$work/stats.log" || { cat "$work/stats.log"; exit 1; }
 
