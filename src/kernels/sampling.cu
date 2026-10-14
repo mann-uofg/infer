@@ -58,44 +58,40 @@ __device__ float BlockReduce(float v, float* scratch) {
   return r;
 }
 
+// Per-warp histograms, padded so the 32 copies of bin b fall in different banks when merged.
+constexpr int kHistStride = 257;
+
 // Finds the largest key K such that the weight of keys >= K is at least `target`, where an
 // element's weight is 1 (counting, for top-k) or its probability (for top-p). Only elements
 // with key >= floor take part.
+//
+// Each warp counts into its own histogram, and the 32 are summed at the end of each pass. With
+// one shared histogram every element was an atomicAdd on one of a handful of bins (logits of
+// similar size share their top bits), and those atomics serialised: 0.8-1.6 ms per token.
 template <bool kByMass>
 __device__ unsigned int RadixSelect(const float* logits, int V, float target, unsigned int floor,
-                                    float max_logit, float inv_temp, float* hist) {
+                                    float max_logit, float inv_temp, float* warp_hist,
+                                    float* hist) {
   unsigned int prefix = 0;
   unsigned int prefix_mask = 0;
   __shared__ unsigned int chosen;
   __shared__ float above;  // weight of keys strictly above the current prefix
   if (threadIdx.x == 0) above = 0.0f;
-  // Same trip count for every thread, so whole warps stay together for the vote below.
-  const int iters = (V + kThreads - 1) / kThreads;
+  float* mine = warp_hist + (threadIdx.x / 32) * kHistStride;
   for (int shift = 24; shift >= 0; shift -= 8) {
-    for (int b = threadIdx.x; b < 256; b += kThreads) hist[b] = 0.0f;
+    for (int b = threadIdx.x; b < kWarps * kHistStride; b += kThreads) warp_hist[b] = 0.0f;
     __syncthreads();
-    for (int it = 0; it < iters; ++it) {
-      const int i = it * kThreads + static_cast<int>(threadIdx.x);
-      unsigned int bin = 256;  // 256 = not counted
-      float w = 0.0f;
-      if (i < V) {
-        const unsigned int key = OrderedBits(logits[i]);
-        if (key >= floor && (key & prefix_mask) == prefix) {
-          bin = (key >> shift) & 0xffu;
-          w = kByMass ? __expf((logits[i] - max_logit) * inv_temp) : 1.0f;
-        }
-      }
-      // Logits of similar size share their top bits, so on the first pass nearly every
-      // element lands in the same bin, and 128K shared-memory atomics on one address
-      // serialise (this cost ~1.6 ms per token). When the whole warp agrees on the bin, sum
-      // in registers and add once.
-      const unsigned int bin0 = __shfl_sync(0xffffffffu, bin, 0);
-      if (__all_sync(0xffffffffu, bin == bin0)) {
-        w = WarpSum(w);
-        if (threadIdx.x % 32 == 0 && bin0 < 256) atomicAdd(&hist[bin0], w);
-      } else if (bin < 256) {
-        atomicAdd(&hist[bin], w);
-      }
+    for (int i = threadIdx.x; i < V; i += kThreads) {
+      const unsigned int key = OrderedBits(logits[i]);
+      if (key < floor || (key & prefix_mask) != prefix) continue;
+      const float w = kByMass ? __expf((logits[i] - max_logit) * inv_temp) : 1.0f;
+      atomicAdd(&mine[(key >> shift) & 0xffu], w);
+    }
+    __syncthreads();
+    if (threadIdx.x < 256) {
+      float sum = 0.0f;
+      for (int w = 0; w < kWarps; ++w) sum += warp_hist[w * kHistStride + threadIdx.x];
+      hist[threadIdx.x] = sum;
     }
     __syncthreads();
     if (threadIdx.x == 0) {
@@ -121,6 +117,7 @@ __global__ void __launch_bounds__(kThreads)
                  int* __restrict__ token, int* __restrict__ history) {
   __shared__ float scratch[kWarps];
   __shared__ float hist[256];
+  __shared__ float warp_hist[kWarps * kHistStride];
   __shared__ float prefix[kThreads];
 
   float m = -FLT_MAX;
@@ -131,7 +128,8 @@ __global__ void __launch_bounds__(kThreads)
   // top-k cut-off (k >= V or k <= 0 means no cut).
   unsigned int floor_key = 0;
   if (top_k > 0 && top_k < V) {
-    floor_key = RadixSelect<false>(logits, V, static_cast<float>(top_k), 0, m, inv_temp, hist);
+    floor_key =
+        RadixSelect<false>(logits, V, static_cast<float>(top_k), 0, m, inv_temp, warp_hist, hist);
   }
 
   // Mass of the top-k set, then the top-p cut-off within it.
@@ -141,7 +139,7 @@ __global__ void __launch_bounds__(kThreads)
   }
   mass = BlockReduce<false>(mass, scratch);
   if (top_p < 1.0f) {
-    floor_key = RadixSelect<true>(logits, V, top_p * mass, floor_key, m, inv_temp, hist);
+    floor_key = RadixSelect<true>(logits, V, top_p * mass, floor_key, m, inv_temp, warp_hist, hist);
   }
 
   // Each thread takes a contiguous range of indices, so thread order is index order.
