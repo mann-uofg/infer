@@ -1,0 +1,15 @@
+date          2026-10-14T21:30Z
+commit        1b4e39d+dirty
+gpu           NVIDIA GeForce RTX 5070 Ti, driver 617.42
+toolkit       release 13.3
+host          WSL2 6.18.54.1-microsoft-standard-WSL2
+clocks before sm 757 MHz / mem 405 MHz (max sm 3090 MHz, not locked)
+gpu before    39 C, 14.70 W, 1258 MiB in use
+command       bench_kernels --filter sample --peak-gbps 845.9
+
+kernel                       variant       time us       GB/s   % peak
+sample T=0.6 p=0.9           radix           157.4        3.3      0.4
+sample T=1 k=40              radix           149.5        3.4      0.4
+sample T=1 k=40 p=0.95       radix           192.2        2.7      0.3
+
+clocks after  sm 757 MHz / mem 14001 MHz

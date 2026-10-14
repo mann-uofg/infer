@@ -1,0 +1,19 @@
+date          2026-10-14T21:22Z
+commit        1b4e39d+dirty
+gpu           NVIDIA GeForce RTX 5070 Ti, driver 617.42
+toolkit       release 13.3
+host          WSL2 6.18.54.1-microsoft-standard-WSL2
+clocks before sm 2925 MHz / mem 14201 MHz (max sm 3090 MHz, not locked)
+gpu before    54 C, 147.89 W, 1263 MiB in use
+command       bench_engine --model models/random-1b --contexts 128,512,2048 --generate 128 --runs 5 --peak-gbps 845.9 --label int4 --weights int4
+
+model     models/random-1b, int4 weights (0.637 GB read per decode step, excluding KV cache)
+device    NVIDIA GeForce RTX 5070 Ti
+backend   optimized, 1 warmup + 5 timed runs, 128 decode steps per run
+
+context |    TTFT ms  prefill/s | decode tok/s (range) |      GB/s  % peak
+    128 |      18.46       6933 |   886.8 (885.5-912.3) |     570.7    67.5
+    512 |      53.91       9498 |   845.5 (844.7-846.8) |     554.8    65.6
+   2048 |     217.17       9431 |   758.9 (756.9-759.4) |     536.2    63.4
+
+clocks after  sm 2887 MHz / mem 14201 MHz

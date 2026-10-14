@@ -1,0 +1,54 @@
+{"kernel":"gemv qkv 3072x2048","variant":"naive","us":186.029,"bytes":1.26034e+07,"gbps":67.7495,"pct_peak":8.00916}
+{"kernel":"gemv qkv 3072x2048","variant":"optimized","us":16.0378,"bytes":1.26034e+07,"gbps":785.857,"pct_peak":92.9019}
+{"kernel":"gemv qkv 3072x2048","variant":"int8","us":9.008,"bytes":6.32422e+06,"gbps":702.068,"pct_peak":82.9965}
+{"kernel":"gemv qkv 3072x2048","variant":"int4","us":7.99296,"bytes":3.26451e+06,"gbps":408.423,"pct_peak":48.2827}
+{"kernel":"gemv o 2048x2048","variant":"naive","us":186.112,"bytes":8.40499e+06,"gbps":45.1609,"pct_peak":5.3388}
+{"kernel":"gemv o 2048x2048","variant":"optimized","us":11.4278,"bytes":8.40499e+06,"gbps":735.484,"pct_peak":86.9469}
+{"kernel":"gemv o 2048x2048","variant":"int8","us":7.26336,"bytes":4.21888e+06,"gbps":580.844,"pct_peak":68.6658}
+{"kernel":"gemv o 2048x2048","variant":"int4","us":6.19648,"bytes":2.17907e+06,"gbps":351.663,"pct_peak":41.5726}
+{"kernel":"gemv gate_up 16384x2048","variant":"naive","us":247.576,"bytes":6.71826e+07,"gbps":271.362,"pct_peak":32.0797}
+{"kernel":"gemv gate_up 16384x2048","variant":"optimized","us":80.0518,"bytes":6.71826e+07,"gbps":839.239,"pct_peak":99.2125}
+{"kernel":"gemv gate_up 16384x2048","variant":"int8","us":38.9606,"bytes":3.36937e+07,"gbps":864.814,"pct_peak":102.236}
+{"kernel":"gemv gate_up 16384x2048","variant":"int4","us":24.5542,"bytes":1.73752e+07,"gbps":707.627,"pct_peak":83.6537}
+{"kernel":"gemv down 2048x8192","variant":"naive","us":759.161,"bytes":3.35954e+07,"gbps":44.2533,"pct_peak":5.23151}
+{"kernel":"gemv down 2048x8192","variant":"optimized","us":41.465,"bytes":3.35954e+07,"gbps":810.212,"pct_peak":95.781}
+{"kernel":"gemv down 2048x8192","variant":"int8","us":21.6032,"bytes":1.68264e+07,"gbps":778.883,"pct_peak":92.0774}
+{"kernel":"gemv down 2048x8192","variant":"int4","us":14.1805,"bytes":8.69171e+06,"gbps":612.935,"pct_peak":72.4595}
+{"kernel":"gemv lm_head 128256x2048","variant":"naive","us":2060.76,"bytes":5.25858e+08,"gbps":255.176,"pct_peak":30.1662}
+{"kernel":"gemv lm_head 128256x2048","variant":"optimized","us":632.703,"bytes":5.25858e+08,"gbps":831.129,"pct_peak":98.2539}
+{"kernel":"gemv lm_head 128256x2048","variant":"int8","us":307.485,"bytes":2.63703e+08,"gbps":857.612,"pct_peak":101.385}
+{"kernel":"gemv lm_head 128256x2048","variant":"int4","us":159.221,"bytes":1.3596e+08,"gbps":853.904,"pct_peak":100.946}
+{"kernel":"rmsnorm H=2048","variant":"naive","us":76.2061,"bytes":20480,"gbps":0.268745,"pct_peak":0.0317703}
+{"kernel":"attention decode ctx=512","variant":"naive","us":1581.26,"bytes":1.06906e+06,"gbps":0.67608,"pct_peak":0.0799244}
+{"kernel":"attention decode ctx=512","variant":"split8","us":5.328,"bytes":1.06906e+06,"gbps":200.649,"pct_peak":23.7201}
+{"kernel":"attention decode ctx=512","variant":"split16","us":5.36704,"bytes":1.06906e+06,"gbps":199.189,"pct_peak":23.5476}
+{"kernel":"attention decode ctx=512","variant":"split32","us":7.17504,"bytes":1.06906e+06,"gbps":148.997,"pct_peak":17.614}
+{"kernel":"attention decode ctx=512","variant":"split64","us":11.0963,"bytes":1.06906e+06,"gbps":96.3433,"pct_peak":11.3894}
+{"kernel":"attention decode ctx=2048","variant":"naive","us":6352.84,"bytes":4.21478e+06,"gbps":0.663449,"pct_peak":0.0784312}
+{"kernel":"attention decode ctx=2048","variant":"split8","us":13.2352,"bytes":4.21478e+06,"gbps":318.453,"pct_peak":37.6466}
+{"kernel":"attention decode ctx=2048","variant":"split16","us":11.1123,"bytes":4.21478e+06,"gbps":379.289,"pct_peak":44.8385}
+{"kernel":"attention decode ctx=2048","variant":"split32","us":12.4723,"bytes":4.21478e+06,"gbps":337.931,"pct_peak":39.9493}
+{"kernel":"attention decode ctx=2048","variant":"split64","us":14.7091,"bytes":4.21478e+06,"gbps":286.542,"pct_peak":33.8742}
+{"kernel":"rope","variant":"naive","us":1.17824,"bytes":20480,"gbps":17.3819,"pct_peak":2.05484}
+{"kernel":"swiglu I=8192","variant":"naive","us":0.88384,"bytes":98304,"gbps":111.224,"pct_peak":13.1486}
+{"kernel":"sample T=0.6 p=0.9","variant":"radix","us":836.379,"bytes":513024,"gbps":0.613387,"pct_peak":0.072513}
+{"kernel":"sample T=1 k=40","variant":"radix","us":854.117,"bytes":513024,"gbps":0.600648,"pct_peak":0.071007}
+{"kernel":"sample T=1 k=40 p=0.95","variant":"radix","us":1007.48,"bytes":513024,"gbps":0.509213,"pct_peak":0.0601978}
+{"kernel":"argmax V=128256","variant":"multiblock","us":1.44256,"bytes":513024,"gbps":355.634,"pct_peak":42.0421}
+{"kernel":"argmax V=128256","variant":"naive","us":19.3274,"bytes":513024,"gbps":26.5439,"pct_peak":3.13795}
+{"kernel":"gemm qkv T=128","variant":"naive","us":4366.39,"flops":1.61061e+09,"tflops":0.368866}
+{"kernel":"gemm qkv T=128","variant":"tiled","us":133.485,"flops":1.61061e+09,"tflops":12.0659}
+{"kernel":"gemm qkv T=128","variant":"cublas-f32","us":103.1,"flops":1.61061e+09,"tflops":15.6218}
+{"kernel":"gemm qkv T=128","variant":"cublas-bf16","us":20.2541,"flops":1.61061e+09,"tflops":79.5204}
+{"kernel":"gemm qkv T=2048","variant":"tiled","us":1254.64,"flops":2.57698e+10,"tflops":20.5395}
+{"kernel":"gemm qkv T=2048","variant":"cublas-f32","us":960.494,"flops":2.57698e+10,"tflops":26.8297}
+{"kernel":"gemm qkv T=2048","variant":"cublas-bf16","us":282.744,"flops":2.57698e+10,"tflops":91.1419}
+{"kernel":"gemm o T=2048","variant":"tiled","us":791.697,"flops":1.71799e+10,"tflops":21.7}
+{"kernel":"gemm o T=2048","variant":"cublas-f32","us":668.851,"flops":1.71799e+10,"tflops":25.6856}
+{"kernel":"gemm o T=2048","variant":"cublas-bf16","us":195.308,"flops":1.71799e+10,"tflops":87.9629}
+{"kernel":"gemm gate_up T=2048","variant":"tiled","us":6593.05,"flops":1.37439e+11,"tflops":20.846}
+{"kernel":"gemm gate_up T=2048","variant":"cublas-f32","us":5978.1,"flops":1.37439e+11,"tflops":22.9904}
+{"kernel":"gemm gate_up T=2048","variant":"cublas-bf16","us":1413.69,"flops":1.37439e+11,"tflops":97.2199}
+{"kernel":"gemm down T=2048","variant":"tiled","us":3077.57,"flops":6.87195e+10,"tflops":22.3291}
+{"kernel":"gemm down T=2048","variant":"cublas-f32","us":4158.01,"flops":6.87195e+10,"tflops":16.527}
+{"kernel":"gemm down T=2048","variant":"cublas-bf16","us":1224.16,"flops":6.87195e+10,"tflops":56.136}

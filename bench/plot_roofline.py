@@ -30,6 +30,10 @@ GEMV_FLOPS = {
     "gemv down 2048x8192": 2 * H * I,
     "gemv lm_head 128256x2048": 2 * V * H,
 }
+# Legend text; tensor cores have their own, higher roof that is not drawn.
+LABELS = {"cublas-bf16": "cublas-bf16 (tensor cores: separate roof, not drawn)",
+          "tiled": "tiled GEMM (mine, fp32 CUDA cores)", "optimized": "GEMV bf16 (mine)",
+          "int8": "GEMV int8 (mine)", "int4": "GEMV int4 (mine)", "naive": "naive (mine)"}
 # (N, K) of each prefill projection.
 GEMM_SHAPES = {"qkv": (Q + 2 * KV, H), "o": (H, Q), "gate_up": (2 * I, H), "down": (H, I)}
 
@@ -77,7 +81,7 @@ def main() -> None:
         else:
             continue
         marker, color = styles[variant]
-        label = variant if variant not in seen else None
+        label = LABELS.get(variant, variant) if variant not in seen else None
         seen.add(variant)
         ax.scatter(intensity, gflops, marker=marker, color=color, label=label, zorder=3)
 

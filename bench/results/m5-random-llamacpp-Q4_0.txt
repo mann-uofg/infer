@@ -1,0 +1,13 @@
+date          2026-10-14T21:22Z
+llama.cpp     v0.6.0 (d812350)
+model         /home/mann/models/random-1b-gguf/model-Q4_0.gguf
+gpu           NVIDIA GeForce RTX 5070 Ti, driver 617.42
+gpu before    34 % busy, 52 C, 130.96 W
+
+            test |    tok/s (mean +/- sd)
+           pp128 |      20875.5 +/- 5127.5
+           pp512 |      37703.3 +/- 2475.9
+          pp2048 |      38726.5 +/- 756.6
+    tg128 @ d128 |        548.6 +/- 4.4
+    tg128 @ d512 |        500.0 +/- 37.4
+   tg128 @ d2048 |        494.8 +/- 21.7

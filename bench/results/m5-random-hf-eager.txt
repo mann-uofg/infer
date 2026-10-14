@@ -1,0 +1,5 @@
+transformers, bf16, attention=eager, 1 warmup + 5 runs
+context |    TTFT ms |   decode tok/s (range)
+    128 |      19.89 |    38.5 ( 36.2- 42.3)
+    512 |      28.62 |    35.2 ( 33.9- 41.1)
+   2048 |     160.16 |    38.9 ( 35.8- 44.3)

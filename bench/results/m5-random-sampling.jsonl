@@ -1,0 +1,3 @@
+{"kernel":"sample T=0.6 p=0.9","variant":"radix","us":157.427,"bytes":513024,"gbps":3.2588,"pct_peak":0.385247}
+{"kernel":"sample T=1 k=40","variant":"radix","us":149.533,"bytes":513024,"gbps":3.43085,"pct_peak":0.405585}
+{"kernel":"sample T=1 k=40 p=0.95","variant":"radix","us":192.182,"bytes":513024,"gbps":2.66946,"pct_peak":0.315577}
