@@ -52,6 +52,7 @@ if(INFER_ENABLE_CUDA)
     src/kernels/gemv.cu
     src/kernels/naive.cu
     src/kernels/prefill.cu
+    src/kernels/sampling.cu
     src/model.cpp
   )
   target_link_libraries(infer_cuda PUBLIC infer_host CUDA::cudart PRIVATE CUDA::nvtx3 infer_options)

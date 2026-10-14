@@ -128,4 +128,11 @@ void ArgmaxPartial(const float* logits, int V, unsigned long long* best, cudaStr
 void ArgmaxFinish(unsigned long long* best, int* token, int* history, const int* pos,
                   cudaStream_t stream);
 
+// Samples a token from softmax(logits / temperature), restricted to the top_k largest logits
+// (top_k <= 0: no limit) and then to the smallest set of those whose probability adds up to
+// top_p (1: no limit). The random number is uniforms[*pos], in [0, 1). Writes *token and
+// history[*pos]. One block; see sampling.cu for the radix-select method.
+void Sample(const float* logits, int V, float temperature, int top_k, float top_p,
+            const float* uniforms, const int* pos, int* token, int* history, cudaStream_t stream);
+
 }  // namespace infer::kernels

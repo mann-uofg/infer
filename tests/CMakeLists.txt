@@ -22,6 +22,7 @@ gtest_discover_tests(host_tests)
 if(INFER_ENABLE_CUDA)
   add_executable(kernel_tests
     kernel_test.cu
+    sampling_test.cu
   )
   target_link_libraries(kernel_tests PRIVATE infer_cuda GTest::gtest_main)
   gtest_discover_tests(kernel_tests PROPERTIES LABELS gpu)
