@@ -162,26 +162,25 @@ class Llama:
         device: str = "cpu",
         kv_dtype: torch.dtype | None = None,
         weights: str = "bf16",
-        quantize_lm_head: bool = True,
+        lm_head: str | None = None,
     ):
         """kv_dtype rounds keys and values to that type after RoPE, the way a KV cache stored
         in that type would. The engine keeps its cache in bf16, so comparisons against it use
         kv_dtype=torch.bfloat16.
 
-        weights="int8" or "int4" replaces every projection (and, with quantize_lm_head, the LM
-        head; the embedding lookup stays bf16) by its quantized-then-dequantized version, using
-        the engine's rule (reference/quant.py)."""
+        weights="int8" or "int4" replaces every projection by its quantized-then-dequantized
+        version, using the engine's rule (reference/quant.py); lm_head does the same for the
+        LM head (default: the same format as weights). The embedding lookup stays bf16."""
         model_dir = Path(model_dir)
         self.cfg = Config.from_json(model_dir / "config.json")
         raw = load_weights(model_dir)
         if self.cfg.tie_word_embeddings or "lm_head.weight" not in raw:
             raw["lm_head.weight"] = raw["model.embed_tokens.weight"]
-        if weights != "bf16":
-            quantize = QUANTIZERS[weights]
-            for name in list(raw):
-                is_proj = name.endswith("_proj.weight")
-                if is_proj or (name == "lm_head.weight" and quantize_lm_head):
-                    raw[name] = quantize(raw[name].to(device))
+        head = lm_head or weights
+        for name in list(raw):
+            fmt = weights if name.endswith("_proj.weight") else head if name == "lm_head.weight" else None
+            if fmt is not None and fmt != "bf16":
+                raw[name] = QUANTIZERS[fmt](raw[name].to(device))
         self.w = {k: v.to(device=device, dtype=dtype) for k, v in raw.items()}
         self.inv_freq = rope_inv_freq(self.cfg).to(device)
         self.device = device

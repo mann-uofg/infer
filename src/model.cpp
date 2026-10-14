@@ -160,7 +160,7 @@ Weights Weights::Load(const std::string& dir, const ModelConfig& cfg, const Load
   const TensorView* final_norm = Expect(st, "model.norm.weight", {H});
   const bool tied = cfg.tie_word_embeddings || !st.Has("lm_head.weight");
   const TensorView* lm_head_src = tied ? embed : Expect(st, "lm_head.weight", {V, H});
-  const WeightFormat head_fmt = options.quantize_lm_head ? fmt : WeightFormat::kBf16;
+  const WeightFormat head_fmt = options.head();
   // A tied bf16 head is the embedding table itself; anything else needs its own copy.
   const bool head_is_embed = tied && head_fmt == WeightFormat::kBf16;
   const Source head = Stack({lm_head_src});

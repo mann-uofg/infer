@@ -95,8 +95,8 @@ Args ParseArgs(int argc, char** argv) {
       a.backend = v;
     } else if (flag == "--weights") {
       a.load.format = infer::ParseWeightFormat(v);
-    } else if (flag == "--quant-lm-head") {
-      a.load.quantize_lm_head = v != "off";
+    } else if (flag == "--lm-head") {
+      a.load.lm_head_format = infer::ParseWeightFormat(v);
     } else if (flag == "--graph") {
       a.graph = v != "off";
     } else if (flag == "--temperature") {
@@ -178,12 +178,13 @@ int main(int argc, char** argv) {
 
     cudaDeviceProp prop{};
     cudaGetDeviceProperties(&prop, 0);
-    std::printf("model     %s, %s weights%s (%.3f GB read per decode step, excluding KV cache)\n",
-                args.model.c_str(), infer::WeightFormatName(args.load.format),
-                args.load.format != infer::WeightFormat::kBf16 && !args.load.quantize_lm_head
-                    ? ", bf16 LM head"
-                    : "",
-                static_cast<double>(weights.decode_bytes()) / 1e9);
+    std::printf(
+        "model     %s, %s weights%s (%.3f GB read per decode step, excluding KV cache)\n",
+        args.model.c_str(), infer::WeightFormatName(args.load.format),
+        args.load.head() != args.load.format
+            ? (std::string(", ") + infer::WeightFormatName(args.load.head()) + " LM head").c_str()
+            : "",
+        static_cast<double>(weights.decode_bytes()) / 1e9);
     std::printf("device    %s\n", prop.name);
     std::printf("backend   %s, %d warmup + %d timed runs, %d decode steps per run\n\n",
                 args.backend.c_str(), args.warmup, args.runs, args.generate);
@@ -232,8 +233,8 @@ int main(int argc, char** argv) {
       if (json.is_open()) {
         json << "{\"label\":\"" << args.label << "\",\"backend\":\"" << args.backend
              << "\",\"weights\":\"" << infer::WeightFormatName(args.load.format)
-             << "\",\"quant_lm_head\":" << (args.load.quantize_lm_head ? "true" : "false")
-             << ",\"sampling\":\"" << (args.sampling.greedy() ? "greedy" : "sampled")
+             << "\",\"lm_head\":\"" << infer::WeightFormatName(args.load.head())
+             << "\",\"sampling\":\"" << (args.sampling.greedy() ? "greedy" : "sampled")
              << "\",\"graph\":\"" << (args.graph ? "on" : "off") << "\",\"context\":" << ctx
              << ",\"generate\":" << args.generate << ",\"runs\":" << args.runs
              << ",\"ttft_ms_median\":" << p.median << ",\"ttft_ms_min\":" << p.min

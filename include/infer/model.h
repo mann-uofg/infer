@@ -3,6 +3,7 @@
 #pragma once
 
 #include <cstddef>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -48,9 +49,13 @@ inline const char* WeightFormatName(WeightFormat f) {
 struct LoadOptions {
   // Format of the projection weights (q/k/v/o, gate/up/down).
   WeightFormat format = WeightFormat::kBf16;
-  // Whether the LM head is stored in `format` too. It is 21% of the bytes a decode step reads
-  // for Llama-3.2-1B, so it matters for speed; it is also the most sensitive layer.
-  bool quantize_lm_head = true;
+  // Format of the LM head; empty means the same as `format`. The head is 21% of the bytes a
+  // decode step reads for Llama-3.2-1B, so it matters for speed, and it is the layer most
+  // sensitive to quantization. (llama.cpp's Q4_0 keeps it at 6 bits; int4 layers with an int8
+  // head read almost exactly the same bytes per token.)
+  std::optional<WeightFormat> lm_head_format;
+
+  WeightFormat head() const { return lm_head_format.value_or(format); }
 };
 
 class Weights {

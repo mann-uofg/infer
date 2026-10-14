@@ -42,7 +42,7 @@ struct Args {
 [[noreturn]] void Usage() {
   std::fprintf(stderr,
                "usage: perplexity --model DIR --tokens FILE [--ctx 512] [--chunks N] [--bos ID]\n"
-               "                  [--weights bf16|int8|int4] [--quant-lm-head on|off]\n"
+               "                  [--weights bf16|int8|int4] [--lm-head bf16|int8|int4]\n"
                "                  [--backend naive|optimized]\n");
   std::exit(2);
 }
@@ -65,8 +65,8 @@ Args ParseArgs(int argc, char** argv) {
       a.bos = std::stoi(v);
     } else if (f == "--weights") {
       a.load.format = infer::ParseWeightFormat(v);
-    } else if (f == "--quant-lm-head") {
-      a.load.quantize_lm_head = v != "off";
+    } else if (f == "--lm-head") {
+      a.load.lm_head_format = infer::ParseWeightFormat(v);
     } else if (f == "--backend") {
       a.backend = v;
     } else {
@@ -114,12 +114,13 @@ int main(int argc, char** argv) {
     infer::DeviceBuffer<float> nll(static_cast<size_t>(scored));
     std::vector<float> host_nll(static_cast<size_t>(scored));
 
-    std::printf("model %s, %s weights%s, %d chunks of %d tokens, scoring %d tokens per chunk\n",
-                args.model.c_str(), infer::WeightFormatName(args.load.format),
-                args.load.format != infer::WeightFormat::kBf16 && !args.load.quantize_lm_head
-                    ? " (bf16 LM head)"
-                    : "",
-                chunks, args.ctx, scored);
+    std::printf(
+        "model %s, %s weights%s, %d chunks of %d tokens, scoring %d tokens per chunk\n",
+        args.model.c_str(), infer::WeightFormatName(args.load.format),
+        args.load.head() != args.load.format
+            ? (std::string(" (") + infer::WeightFormatName(args.load.head()) + " LM head)").c_str()
+            : "",
+        chunks, args.ctx, scored);
 
     double sum = 0.0;
     double sum_sq = 0.0;

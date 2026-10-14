@@ -68,8 +68,8 @@ Args ParseArgs(int argc, char** argv) {
       a.backend = value;
     } else if (flag == "--weights") {
       a.load.format = infer::ParseWeightFormat(value);
-    } else if (flag == "--quant-lm-head") {
-      a.load.quantize_lm_head = value != "off";
+    } else if (flag == "--lm-head") {
+      a.load.lm_head_format = infer::ParseWeightFormat(value);
     } else if (flag == "--graph") {
       a.graph = value != "off";
     } else if (flag == "--temperature") {
