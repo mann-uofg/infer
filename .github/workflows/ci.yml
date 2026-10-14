@@ -32,6 +32,23 @@ jobs:
       - name: Test
         run: ctest --preset ${{ matrix.preset }}
 
+  # The PyTorch reference against Hugging Face transformers, on the tiny random model.
+  # The full-size checks need the model files and a GPU, so they run locally.
+  reference:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
+        with:
+          python-version: "3.12"
+      - name: Install CPU-only PyTorch and the other requirements
+        run: |
+          pip install torch==$(grep '^torch==' requirements.txt | cut -d= -f3) \
+            --index-url https://download.pytorch.org/whl/cpu
+          pip install $(grep -v '^torch==' requirements.txt | grep -v '^#')
+      - name: Test
+        run: python -m pytest -q
+
   format:
     runs-on: ubuntu-24.04
     steps:
