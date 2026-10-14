@@ -65,6 +65,7 @@ void Engine::RunPrefill(int T, bool all_logits, std::vector<std::vector<float>>*
   const int H = cfg_.hidden_size;
   const int I = cfg_.intermediate_size;
   const float eps = cfg_.rms_norm_eps;
+  const bool naive = opt_.backend == Backend::kNaive;
 
   auto dump = [&] {
     if (hidden == nullptr) return;
@@ -74,6 +75,21 @@ void Engine::RunPrefill(int T, bool all_logits, std::vector<std::vector<float>>*
     CUDA_CHECK(cudaStreamSynchronize(stream_));
     hidden->push_back(std::move(host));
   };
+  auto norm = [&](const float* in, const bf16* w, int rows, float* out) {
+    if (naive) {
+      k::RmsNormNaive(in, w, rows, H, eps, out, stream_);
+    } else {
+      k::RmsNorm(in, w, rows, H, eps, out, stream_);
+    }
+  };
+  // out[T, N] (+)= in[T, K] x W^T
+  auto project = [&](const float* in, const bf16* W, int N, int K, float* out, bool accumulate) {
+    if (naive) {
+      k::MatmulNaive(in, W, T, N, K, out, accumulate, stream_);
+    } else {
+      k::Gemm(in, W, T, N, K, out, accumulate, stream_);
+    }
+  };
 
   k::Embedding(w_.embed, tokens_.get(), T, H, x_.get(), stream_);
   dump();
@@ -82,29 +98,42 @@ void Engine::RunPrefill(int T, bool all_logits, std::vector<std::vector<float>>*
     const LayerWeights& l = w_.layers[static_cast<size_t>(i)];
 
     // Attention block: x += o_proj(attention(rope(qkv_proj(norm(x)))))
-    k::RmsNormNaive(x_.get(), l.attn_norm, T, H, eps, h_.get(), stream_);
-    k::MatmulNaive(h_.get(), l.wqkv, T, cfg_.qkv_dim(), H, qkv_.get(), false, stream_);
+    norm(x_.get(), l.attn_norm, T, h_.get());
+    project(h_.get(), l.wqkv, cfg_.qkv_dim(), H, qkv_.get(), false);
     k::RopeNaive(qkv_.get(), T, cfg_.num_heads, cfg_.num_kv_heads, cfg_.head_dim, w_.rope_inv_freq,
                  pos_, stream_);
     k::KvCacheWrite(qkv_.get(), T, cfg_.num_heads, cfg_.num_kv_heads, cfg_.head_dim, pos_,
                     opt_.max_seq, KCache(i), VCache(i), stream_);
-    k::AttentionNaive(qkv_.get(), T, pos_, cfg_.num_heads, cfg_.num_kv_heads, cfg_.head_dim,
-                      KCache(i), VCache(i), opt_.max_seq, attn_.get(), stream_);
-    k::MatmulNaive(attn_.get(), l.wo, T, H, cfg_.q_dim(), x_.get(), true, stream_);
+    if (naive) {
+      k::AttentionNaive(qkv_.get(), T, pos_, cfg_.num_heads, cfg_.num_kv_heads, cfg_.head_dim,
+                        KCache(i), VCache(i), opt_.max_seq, attn_.get(), stream_);
+    } else {
+      k::AttentionPrefill(qkv_.get(), T, pos_, cfg_.num_heads, cfg_.num_kv_heads, cfg_.head_dim,
+                          KCache(i), VCache(i), opt_.max_seq, attn_.get(), stream_);
+    }
+    project(attn_.get(), l.wo, H, cfg_.q_dim(), x_.get(), true);
 
     // MLP block: x += down_proj(silu(gate_proj(norm(x))) * up_proj(norm(x)))
-    k::RmsNormNaive(x_.get(), l.mlp_norm, T, H, eps, h_.get(), stream_);
-    k::MatmulNaive(h_.get(), l.w_gate_up, T, 2 * I, H, gate_up_.get(), false, stream_);
+    norm(x_.get(), l.mlp_norm, T, h_.get());
+    project(h_.get(), l.w_gate_up, 2 * I, H, gate_up_.get(), false);
     k::SwiGlu(gate_up_.get(), T, I, act_.get(), stream_);
-    k::MatmulNaive(act_.get(), l.w_down, T, H, I, x_.get(), true, stream_);
+    project(act_.get(), l.w_down, H, I, x_.get(), true);
     dump();
   }
 
   // Only the rows whose logits are wanted go through the final norm and the LM head.
   const int rows = all_logits ? T : 1;
   const float* last = x_.get() + static_cast<size_t>(T - rows) * H;
-  k::RmsNormNaive(last, w_.final_norm, rows, H, eps, h_.get(), stream_);
-  k::MatmulNaive(h_.get(), w_.lm_head, rows, cfg_.vocab_size, H, logits_.get(), false, stream_);
+  if (naive) {
+    k::RmsNormNaive(last, w_.final_norm, rows, H, eps, h_.get(), stream_);
+    k::MatmulNaive(h_.get(), w_.lm_head, rows, cfg_.vocab_size, H, logits_.get(), false, stream_);
+  } else if (rows == 1) {
+    k::Gemv(last, w_.lm_head, cfg_.vocab_size, H, logits_.get(), k::GemvOut::kStore, w_.final_norm,
+            eps, stream_);
+  } else {
+    k::RmsNorm(last, w_.final_norm, rows, H, eps, h_.get(), stream_);
+    k::Gemm(h_.get(), w_.lm_head, rows, cfg_.vocab_size, H, logits_.get(), false, stream_);
+  }
 }
 
 // The naive decode step: the prefill kernels with T = 1. The position is a host value baked
