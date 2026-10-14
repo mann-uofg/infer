@@ -31,10 +31,21 @@ endif()
 # Warning flags for our own targets only (not third-party code).
 add_library(infer_options INTERFACE)
 target_compile_options(infer_options INTERFACE
-  $<$<COMPILE_LANGUAGE:CXX>:-Wall -Wextra -Wpedantic -Wshadow -Wconversion -Werror>)
+  $<$<COMPILE_LANGUAGE:CXX>:-Wall -Wextra -Wpedantic -Wshadow -Wconversion -Werror>
+  $<$<COMPILE_LANGUAGE:CUDA>:-Werror=all-warnings -Xcompiler=-Wall,-Wextra,-Werror>)
+
+# Host-only code: config, JSON and safetensors parsing. No CUDA needed, so CI tests it.
+add_library(infer_host
+  src/config.cpp
+  src/json.cpp
+  src/safetensors.cpp
+)
+target_include_directories(infer_host PUBLIC include)
+target_link_libraries(infer_host PRIVATE infer_options)
 
 if(INFER_ENABLE_CUDA)
   find_package(CUDAToolkit REQUIRED)
+
 
   add_executable(device_info tools/device_info.cpp)
   target_link_libraries(device_info PRIVATE infer_options CUDA::cudart)
@@ -44,4 +55,5 @@ endif()
 
 if(INFER_BUILD_TESTS)
   enable_testing()
+  add_subdirectory(tests)
 endif()
