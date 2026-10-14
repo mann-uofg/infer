@@ -167,9 +167,42 @@ void BenchGemv(Runner& r, const std::string& name, int N, int K, k::GemvOut out,
              k::MatmulNaive(x.get(i), W.get(i), 1, rows, K, y.get(), false, st);
            }));
   r.Report(name, "optimized", bytes, TimeUs([&](int i, cudaStream_t st) {
-             k::Gemv(x.get(i), W.get(i), N, K, out == k::GemvOut::kSwiGlu ? act.get() : y.get(),
-                     out, norm ? nw.get(i) : nullptr, 1e-5f, st);
+             k::Gemv(x.get(i), k::Linear{k::WeightFormat::kBf16, W.get(i), nullptr, rows, K},
+                     out == k::GemvOut::kSwiGlu ? act.get() : y.get(), out,
+                     norm ? nw.get(i) : nullptr, 1e-5f, st);
            }));
+
+  // Quantized: the same kernel structure reading fewer bytes. GB/s is the bandwidth on the
+  // quantized bytes (data + scales), so the % of peak says how well the kernel streams them.
+  for (k::WeightFormat f : {k::WeightFormat::kInt8, k::WeightFormat::kInt4}) {
+    const size_t n = static_cast<size_t>(rows) * K;
+    const size_t data = f == k::WeightFormat::kInt8 ? n : n / 2;
+    const size_t scales =
+        f == k::WeightFormat::kInt8 ? rows * sizeof(float) : n / k::kInt4Group * sizeof(__half);
+    const int qcopies = CopiesFor(data + scales);
+    std::vector<DeviceBuffer<std::byte>> qd;
+    std::vector<DeviceBuffer<std::byte>> qs;
+    for (int c = 0; c < qcopies; ++c) {
+      qd.emplace_back(data);
+      qs.emplace_back(scales);
+      if (f == k::WeightFormat::kInt8) {
+        k::QuantizeInt8(W.get(c), rows, K, reinterpret_cast<int8_t*>(qd.back().get()),
+                        reinterpret_cast<float*>(qs.back().get()), nullptr);
+      } else {
+        k::QuantizeInt4(W.get(c), rows, K, reinterpret_cast<uint8_t*>(qd.back().get()),
+                        reinterpret_cast<__half*>(qs.back().get()), nullptr);
+      }
+    }
+    CUDA_CHECK(cudaDeviceSynchronize());
+    const double qbytes = static_cast<double>(data + scales) + 4.0 * (K + rows);
+    r.Report(name, f == k::WeightFormat::kInt8 ? "int8" : "int4", qbytes,
+             TimeUs([&](int i, cudaStream_t st) {
+               const size_t c = static_cast<size_t>(i % qcopies);
+               k::Gemv(x.get(i), k::Linear{f, qd[c].get(), qs[c].get(), rows, K},
+                       out == k::GemvOut::kSwiGlu ? act.get() : y.get(), out,
+                       norm ? nw.get(i) : nullptr, 1e-5f, st);
+             }));
+  }
 }
 
 void BenchRmsNorm(Runner& r) {
@@ -246,7 +279,8 @@ void BenchGemm(Runner& r, cublasHandle_t cublas, const std::string& name, int T,
                   }));
   }
   r.ReportFlops(name, "tiled", flops, TimeUs([&](int i, cudaStream_t st) {
-                  k::Gemm(A.get(i), W.get(i), T, N, K, C.get(), false, st);
+                  k::Gemm(A.get(i), k::Linear{k::WeightFormat::kBf16, W.get(i), nullptr, N, K}, T,
+                          C.get(), false, st);
                 }));
 
   // Column-major view: C^T [N, T] = W [N, K] x A^T [K, T], with W read transposed.
