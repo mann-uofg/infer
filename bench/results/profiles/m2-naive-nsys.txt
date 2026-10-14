@@ -1,0 +1,18 @@
+Generating SQLite file /tmp/tmp.d28nO5yFBB/m2-naive.sqlite from /tmp/tmp.d28nO5yFBB/m2-naive.nsys-rep
+Processing [/tmp/tmp.d28nO5yFBB/m2-naive.sqlite] with [/opt/nvidia/nsight-systems/2026.1.3/target-linux-x64/reports/cuda_gpu_kern_sum.py]... 
+
+ ** CUDA GPU Kernel Summary (cuda_gpu_kern_sum):
+
++----------+-----------------+-----------+-----------+-----------+----------+----------+-------------+------------------------------------------------------------------------------------------------------+
+| Time (%) | Total Time (ns) | Instances | Avg (ns)  | Med (ns)  | Min (ns) | Max (ns) | StdDev (ns) |                                                 Name                                                 |
++----------+-----------------+-----------+-----------+-----------+----------+----------+-------------+------------------------------------------------------------------------------------------------------+
+|     47.3 |        27900861 |        16 | 1743803.8 | 1784409.5 |  1596753 |  2061535 |    138337.8 | void infer::kernels::<unnamed>::AttentionNaiveKernel<(int)64>(const float *, int, int, int, int, co… |
+|     44.4 |        26231813 |        65 |  403566.4 |  237865.0 |   189524 |  2060946 |    328020.4 | infer::kernels::<unnamed>::MatmulNaiveKernel(const float *, const __nv_bfloat16 *, int, int, int, f… |
+|      8.1 |         4797795 |        33 |  145387.7 |  103103.0 |   100514 |   391405 |     94248.7 | infer::kernels::<unnamed>::RmsNormNaiveKernel(const float *, const __nv_bfloat16 *, int, int, float… |
+|      0.1 |           40933 |         1 |   40933.0 |   40933.0 |    40933 |    40933 |         0.0 | infer::kernels::<unnamed>::ArgmaxKernel(const float *, int, int *)                                   |
+|      0.0 |           20646 |        16 |    1290.4 |    1294.5 |     1147 |     1376 |        60.9 | infer::kernels::<unnamed>::RopeNaiveKernel(float *, int, int, int, int, const float *, int)          |
+|      0.0 |           14253 |        16 |     890.8 |     917.0 |      787 |      918 |        43.2 | infer::kernels::<unnamed>::KvCacheWriteKernel(const float *, int, int, int, int, int, int, __nv_bfl… |
+|      0.0 |           13141 |        16 |     821.3 |     819.0 |      786 |      918 |        30.6 | infer::kernels::<unnamed>::SwiGluKernel(const float *, int, int, float *)                            |
+|      0.0 |            3081 |         1 |    3081.0 |    3081.0 |     3081 |     3081 |         0.0 | infer::kernels::<unnamed>::EmbeddingKernel(const __nv_bfloat16 *, const int *, int, float *)         |
++----------+-----------------+-----------+-----------+-----------+----------+----------+-------------+------------------------------------------------------------------------------------------------------+
+

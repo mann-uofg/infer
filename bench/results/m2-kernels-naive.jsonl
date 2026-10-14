@@ -1,0 +1,11 @@
+{"kernel":"gemv qkv 3072x2048","variant":"naive","us":191.258,"bytes":1.26034e+07,"gbps":65.8975,"pct_peak":7.73899}
+{"kernel":"gemv o 2048x2048","variant":"naive","us":191.728,"bytes":8.40499e+06,"gbps":43.8381,"pct_peak":5.14834}
+{"kernel":"gemv gate_up 16384x2048","variant":"naive","us":249.292,"bytes":6.71826e+07,"gbps":269.494,"pct_peak":31.6493}
+{"kernel":"gemv down 2048x8192","variant":"naive","us":757.608,"bytes":3.35954e+07,"gbps":44.344,"pct_peak":5.20775}
+{"kernel":"gemv lm_head 128256x2048","variant":"naive","us":2227.15,"bytes":5.25858e+08,"gbps":236.113,"pct_peak":27.7291}
+{"kernel":"rmsnorm H=2048","variant":"naive","us":79.1667,"bytes":20480,"gbps":0.258695,"pct_peak":0.030381}
+{"kernel":"attention decode ctx=512","variant":"naive","us":1582.81,"bytes":1.06906e+06,"gbps":0.675419,"pct_peak":0.079321}
+{"kernel":"attention decode ctx=2048","variant":"naive","us":6283.6,"bytes":4.21478e+06,"gbps":0.670759,"pct_peak":0.0787739}
+{"kernel":"rope","variant":"naive","us":1.15584,"bytes":20480,"gbps":17.7187,"pct_peak":2.08088}
+{"kernel":"swiglu I=8192","variant":"naive","us":0.95744,"bytes":98304,"gbps":102.674,"pct_peak":12.058}
+{"kernel":"argmax V=128256","variant":"naive","us":19.3594,"bytes":513024,"gbps":26.5,"pct_peak":3.11216}

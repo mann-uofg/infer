@@ -1,0 +1,23 @@
+date          2026-10-14T19:48Z
+commit        cbf6f33+dirty
+gpu           NVIDIA GeForce RTX 5070 Ti, driver 617.42
+toolkit       release 13.3
+host          WSL2 6.18.54.1-microsoft-standard-WSL2
+clocks before sm 840 MHz / mem 405 MHz (max sm 3090 MHz, not locked)
+gpu before    42 C, 14.40 W, 2141 MiB in use
+command       bench_kernels --peak-gbps 851.5
+
+kernel                       variant       time us       GB/s   % peak
+gemv qkv 3072x2048           naive           191.3       65.9      7.7
+gemv o 2048x2048             naive           191.7       43.8      5.1
+gemv gate_up 16384x2048      naive           249.3      269.5     31.6
+gemv down 2048x8192          naive           757.6       44.3      5.2
+gemv lm_head 128256x2048     naive          2227.1      236.1     27.7
+rmsnorm H=2048               naive            79.2        0.3      0.0
+attention decode ctx=512     naive          1582.8        0.7      0.1
+attention decode ctx=2048    naive          6283.6        0.7      0.1
+rope                         naive             1.2       17.7      2.1
+swiglu I=8192                naive             1.0      102.7     12.1
+argmax V=128256              naive            19.4       26.5      3.1
+
+clocks after  sm 2940 MHz / mem 14001 MHz
