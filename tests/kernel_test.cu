@@ -308,6 +308,7 @@ TEST(DecodeKernelTest, ArgmaxPartialFindsMaxLowestIndexAndResets) {
   CUDA_CHECK(cudaMemset(best.get(), 0, best.bytes()));
   DeviceBuffer<int> token(1);
   DeviceBuffer<int> history(4);
+  CUDA_CHECK(cudaMemset(history.get(), 0, history.bytes()));
   auto d_pos = Upload(std::vector<int>{2});
 
   auto run = [&](const std::vector<float>& logits) {
@@ -335,6 +336,67 @@ TEST(DecodeKernelTest, ArgmaxPartialFindsMaxLowestIndexAndResets) {
   small[0] = 100.0f;
   EXPECT_EQ(run(small), 0);
 }
+
+// ---- Optimized prefill kernels ----
+
+TEST(PrefillKernelTest, RmsNormMatchesReference) {
+  const int T = 9, H = 2048;
+  const auto x = RandomFloats(T * H, 3.0f, 50);
+  const auto w = RoundTripBf16(RandomFloats(H, 1.0f, 51));
+  auto d_x = Upload(x);
+  auto d_w = Upload(ToBf16(w));
+  DeviceBuffer<float> d_out(T * H);
+  kernels::RmsNorm(d_x.get(), d_w.get(), T, H, 1e-5f, d_out.get(), nullptr);
+  ExpectClose(Download(d_out), test::CpuRmsNorm(x, w, T, H, 1e-5f), 1e-5f, 1e-5f);
+}
+
+class GemmTest : public ::testing::TestWithParam<std::tuple<int, int, int>> {};
+
+TEST_P(GemmTest, MatchesReference) {
+  const auto [T, N, K] = GetParam();
+  const auto x = RandomFloats(static_cast<size_t>(T) * K, 1.0f, 52);
+  const auto W = RoundTripBf16(RandomFloats(static_cast<size_t>(N) * K, 0.05f, 53));
+  const auto y0 = RandomFloats(static_cast<size_t>(T) * N, 1.0f, 54);
+  auto d_x = Upload(x);
+  auto d_W = Upload(ToBf16(W));
+  const auto want = test::CpuMatmul(x, W, T, N, K);
+
+  DeviceBuffer<float> d_y(static_cast<size_t>(T) * N);
+  kernels::Gemm(d_x.get(), d_W.get(), T, N, K, d_y.get(), false, nullptr);
+  ExpectClose(Download(d_y), want, 1e-4f, 1e-4f);
+
+  d_y = Upload(y0);
+  kernels::Gemm(d_x.get(), d_W.get(), T, N, K, d_y.get(), true, nullptr);
+  std::vector<float> sum(want.size());
+  for (size_t i = 0; i < want.size(); ++i) sum[i] = y0[i] + want[i];
+  ExpectClose(Download(d_y), sum, 1e-4f, 1e-4f);
+}
+
+// Small tiles (few output tiles), big tiles (>= 140 of them), and ragged edges in T and N.
+INSTANTIATE_TEST_SUITE_P(
+    Shapes, GemmTest,
+    ::testing::Values(std::make_tuple(2, 64, 64), std::make_tuple(37, 1001, 512),
+                      std::make_tuple(128, 3072, 2048), std::make_tuple(300, 8192, 2048),
+                      std::make_tuple(257, 2048, 1408), std::make_tuple(1, 17, 16)));
+
+class AttentionPrefillTest : public ::testing::TestWithParam<std::tuple<int, int, int, int>> {};
+
+TEST_P(AttentionPrefillTest, MatchesReference) {
+  const auto [T, past, nh, nkv] = GetParam();
+  AttentionCase c(T, past, nh, nkv, 64, 55);
+  DeviceBuffer<float> d_out(static_cast<size_t>(T) * nh * 64);
+  kernels::AttentionPrefill(c.new_rows(), T, past, nh, nkv, 64, c.k_cache.get(), c.v_cache.get(),
+                            c.max_seq, d_out.get(), nullptr);
+  ExpectClose(Download(d_out), c.want, 1e-5f, 1e-4f);
+}
+
+// (T, past, num_heads, num_kv_heads): a query tile that is partly empty, several key tiles,
+// a prefill continuing after cached positions, and a single query.
+INSTANTIATE_TEST_SUITE_P(
+    Shapes, AttentionPrefillTest,
+    ::testing::Values(std::make_tuple(5, 0, 32, 8), std::make_tuple(37, 0, 32, 8),
+                      std::make_tuple(130, 0, 8, 2), std::make_tuple(70, 100, 8, 2),
+                      std::make_tuple(1, 63, 4, 4), std::make_tuple(200, 3, 16, 4)));
 
 }  // namespace
 }  // namespace infer

@@ -59,6 +59,23 @@ void SwiGlu(const float* gate_up, int T, int I, float* out, cudaStream_t stream)
 // out[0] = index of the largest logit (lowest index on ties).
 void Argmax(const float* logits, int V, int* out, cudaStream_t stream);
 
+// ---- Optimized prefill kernels (many tokens at once) ----
+
+// Same as RmsNormNaive, one block per row with vector loads. H must be a multiple of 4.
+void RmsNorm(const float* x, const bf16* w, int T, int H, float eps, float* out,
+             cudaStream_t stream);
+
+// C[T, N] (+)= A[T, K] x W[N, K]^T, shared-memory tiled with register blocking.
+// K must be a multiple of 16.
+void Gemm(const float* A, const bf16* W, int T, int N, int K, float* C, bool accumulate,
+          cudaStream_t stream);
+
+// Same contract as AttentionNaive, FlashAttention-style: tiles of keys through shared memory
+// with an online softmax, never materialising the T x T score matrix. head_dim must be 64.
+void AttentionPrefill(const float* qkv, int T, int pos0, int num_heads, int num_kv_heads,
+                      int head_dim, const bf16* k_cache, const bf16* v_cache, int max_seq,
+                      float* out, cudaStream_t stream);
+
 // ---- Optimized decode kernels (one token at a time) ----
 
 enum class GemvOut {
