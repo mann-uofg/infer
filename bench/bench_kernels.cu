@@ -10,8 +10,13 @@
 // rest of the model (2.5 GB) streams through L2 between two uses of it. So each benchmark
 // cycles through enough copies of its inputs to cover 256 MB.
 //
+// Prefill GEMMs are compute-bound, so they are reported in TFLOPS instead, next to cuBLAS as a
+// baseline: cuBLAS SGEMM (fp32, same precision as mine, W converted to fp32 beforehand) and
+// cuBLAS on bf16 inputs with tensor cores (what a production engine would use).
+//
 //   bench_kernels [--peak-gbps 851.5] [--json FILE] [--filter SUBSTRING]
 
+#include <cublas_v2.h>
 #include <cuda_runtime.h>
 
 #include <algorithm>
@@ -120,6 +125,15 @@ class Runner {
     return opt_.filter.empty() || name.find(opt_.filter) != std::string::npos;
   }
 
+  void ReportFlops(const std::string& name, const std::string& variant, double flops, double us) {
+    const double tflops = flops / (us * 1e-6) / 1e12;
+    std::printf("%-28s %-10s %10.1f %10.1f TFLOPS\n", name.c_str(), variant.c_str(), us, tflops);
+    if (json_.is_open()) {
+      json_ << "{\"kernel\":\"" << name << "\",\"variant\":\"" << variant << "\",\"us\":" << us
+            << ",\"flops\":" << flops << ",\"tflops\":" << tflops << "}\n";
+    }
+  }
+
   void Report(const std::string& name, const std::string& variant, double bytes, double us) {
     const double gbps = bytes / (us * 1e-6) / 1e9;
     const double pct = opt_.peak_gbps > 0 ? 100.0 * gbps / opt_.peak_gbps : 0.0;
@@ -198,6 +212,74 @@ void BenchAttention(Runner& r, int ctx) {
   }
 }
 
+void CublasCheck(cublasStatus_t s, const char* what) {
+  if (s != CUBLAS_STATUS_SUCCESS) {
+    throw infer::CudaError(std::string(what) + " failed with cuBLAS status " +
+                           std::to_string(static_cast<int>(s)));
+  }
+}
+
+__global__ void ToFloatKernel(const bf16* in, float* out, size_t n) {
+  const size_t i = static_cast<size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+  if (i < n) out[i] = __bfloat162float(in[i]);
+}
+
+__global__ void ToBf16Kernel(const float* in, bf16* out, size_t n) {
+  const size_t i = static_cast<size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+  if (i < n) out[i] = __float2bfloat16(in[i]);
+}
+
+// Prefill projection C[T, N] = A[T, K] x W[N, K]^T.
+void BenchGemm(Runner& r, cublasHandle_t cublas, const std::string& name, int T, int N, int K) {
+  if (!r.Wanted(name)) return;
+  const size_t wn = static_cast<size_t>(N) * K;
+  const size_t an = static_cast<size_t>(T) * K;
+  const int copies = CopiesFor(wn * sizeof(bf16) + an * sizeof(float));
+  Rotation<bf16> W(wn, copies, 60);
+  Rotation<float> A(an, copies, 61);
+  DeviceBuffer<float> C(static_cast<size_t>(T) * N);
+  const double flops = 2.0 * T * N * K;
+
+  if (T <= 256) {  // the naive kernel takes seconds at T = 2048
+    r.ReportFlops(name, "naive", flops, TimeUs([&](int i, cudaStream_t st) {
+                    k::MatmulNaive(A.get(i), W.get(i), T, N, K, C.get(), false, st);
+                  }));
+  }
+  r.ReportFlops(name, "tiled", flops, TimeUs([&](int i, cudaStream_t st) {
+                  k::Gemm(A.get(i), W.get(i), T, N, K, C.get(), false, st);
+                }));
+
+  // Column-major view: C^T [N, T] = W [N, K] x A^T [K, T], with W read transposed.
+  std::vector<DeviceBuffer<float>> wf;
+  std::vector<DeviceBuffer<bf16>> ab;
+  for (int c = 0; c < copies; ++c) {
+    wf.emplace_back(wn);
+    ab.emplace_back(an);
+    ToFloatKernel<<<static_cast<unsigned>((wn + 255) / 256), 256>>>(W.get(c), wf.back().get(), wn);
+    ToBf16Kernel<<<static_cast<unsigned>((an + 255) / 256), 256>>>(A.get(c), ab.back().get(), an);
+  }
+  CUDA_CHECK(cudaDeviceSynchronize());
+  const float alpha = 1.0f;
+  const float beta = 0.0f;
+  r.ReportFlops(name, "cublas-f32", flops, TimeUs([&](int i, cudaStream_t st) {
+                  CublasCheck(cublasSetStream(cublas, st), "cublasSetStream");
+                  CublasCheck(cublasGemmEx(cublas, CUBLAS_OP_T, CUBLAS_OP_N, N, T, K, &alpha,
+                                           wf[static_cast<size_t>(i % copies)].get(), CUDA_R_32F, K,
+                                           A.get(i), CUDA_R_32F, K, &beta, C.get(), CUDA_R_32F, N,
+                                           CUBLAS_COMPUTE_32F, CUBLAS_GEMM_DEFAULT),
+                              "cublasGemmEx f32");
+                }));
+  r.ReportFlops(
+      name, "cublas-bf16", flops, TimeUs([&](int i, cudaStream_t st) {
+        CublasCheck(cublasSetStream(cublas, st), "cublasSetStream");
+        CublasCheck(
+            cublasGemmEx(cublas, CUBLAS_OP_T, CUBLAS_OP_N, N, T, K, &alpha, W.get(i), CUDA_R_16BF,
+                         K, ab[static_cast<size_t>(i % copies)].get(), CUDA_R_16BF, K, &beta,
+                         C.get(), CUDA_R_32F, N, CUBLAS_COMPUTE_32F, CUBLAS_GEMM_DEFAULT),
+            "cublasGemmEx bf16");
+      }));
+}
+
 void BenchSmallOps(Runner& r) {
   if (r.Wanted("rope")) {
     Rotation<float> qkv(QKV, 64, 8);
@@ -252,6 +334,18 @@ int main(int argc, char** argv) {
     BenchAttention(r, 512);
     BenchAttention(r, 2048);
     BenchSmallOps(r);
+
+    // cuBLAS needs a fixed workspace to be capturable in a CUDA graph.
+    cublasHandle_t cublas;
+    CublasCheck(cublasCreate(&cublas), "cublasCreate");
+    DeviceBuffer<std::byte> workspace(64ull << 20);
+    CublasCheck(cublasSetWorkspace(cublas, workspace.get(), workspace.bytes()), "workspace");
+    BenchGemm(r, cublas, "gemm qkv T=128", 128, QKV, H);
+    BenchGemm(r, cublas, "gemm qkv T=2048", 2048, QKV, H);
+    BenchGemm(r, cublas, "gemm o T=2048", 2048, H, NH * HD);
+    BenchGemm(r, cublas, "gemm gate_up T=2048", 2048, 2 * I, H);
+    BenchGemm(r, cublas, "gemm down T=2048", 2048, H, I);
+    cublasDestroy(cublas);
   } catch (const std::exception& e) {
     std::fprintf(stderr, "error: %s\n", e.what());
     return 1;
