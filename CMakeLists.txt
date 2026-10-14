@@ -52,6 +52,7 @@ if(INFER_ENABLE_CUDA)
     src/kernels/gemv.cu
     src/kernels/naive.cu
     src/kernels/prefill.cu
+    src/kernels/quant.cu
     src/kernels/sampling.cu
     src/model.cpp
   )

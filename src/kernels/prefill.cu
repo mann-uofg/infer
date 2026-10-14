@@ -7,6 +7,7 @@
 // operands in registers and shared memory and doing as many FMAs per load as possible.
 
 #include <cuda_bf16.h>
+#include <cuda_fp16.h>
 
 #include <cfloat>
 
@@ -62,7 +63,43 @@ __global__ void __launch_bounds__(kNormThreads)
   }
 }
 
-// ---- GEMM: C[T, N] (+)= A[T, K] (fp32) x W[N, K]^T (bf16) ----
+// ---- GEMM: C[T, N] (+)= A[T, K] (fp32) x W[N, K]^T (bf16, int8 or int4) ----
+//
+// The weight loaders: four consecutive weights of row n starting at k (k a multiple of 4),
+// dequantized to fp32 on the way into shared memory, so the inner loop is the same for every
+// format.
+struct Bf16Load {
+  __device__ static float4 Load4(const Linear& W, int n, int k) {
+    const uint2 raw = *reinterpret_cast<const uint2*>(static_cast<const bf16*>(W.data) +
+                                                      static_cast<size_t>(n) * W.cols + k);
+    const float2 a = __bfloat1622float2(*reinterpret_cast<const __nv_bfloat162*>(&raw.x));
+    const float2 b = __bfloat1622float2(*reinterpret_cast<const __nv_bfloat162*>(&raw.y));
+    return make_float4(a.x, a.y, b.x, b.y);
+  }
+};
+
+struct Int8Load {
+  __device__ static float4 Load4(const Linear& W, int n, int k) {
+    const char4 q = *reinterpret_cast<const char4*>(static_cast<const int8_t*>(W.data) +
+                                                    static_cast<size_t>(n) * W.cols + k);
+    const float s = static_cast<const float*>(W.scales)[n];
+    return make_float4(q.x * s, q.y * s, q.z * s, q.w * s);
+  }
+};
+
+struct Int4Load {
+  __device__ static float4 Load4(const Linear& W, int n, int k) {
+    const unsigned short two = *reinterpret_cast<const unsigned short*>(
+        static_cast<const uint8_t*>(W.data) + static_cast<size_t>(n) * (W.cols / 2) + k / 2);
+    const float s = __half2float(static_cast<const __half*>(
+        W.scales)[static_cast<size_t>(n) * (W.cols / kInt4Group) + k / kInt4Group]);
+    return make_float4(static_cast<float>(static_cast<int>(two & 0xfu) - 8) * s,
+                       static_cast<float>(static_cast<int>((two >> 4) & 0xfu) - 8) * s,
+                       static_cast<float>(static_cast<int>((two >> 8) & 0xfu) - 8) * s,
+                       static_cast<float>(static_cast<int>((two >> 12) & 0xfu) - 8) * s);
+  }
+};
+
 //
 // Each block computes a BM x BN tile of C, each thread a TM x TN sub-tile held in registers.
 // The k dimension is walked BK at a time: the block copies an A tile (BM x BK) and a W tile
@@ -70,11 +107,12 @@ __global__ void __launch_bounds__(kNormThreads)
 // thread needs (TM of A, TN of W) are contiguous and can be read with one 16-byte load each.
 // Every element brought into shared memory is then used TN (or TM) times from registers.
 // This is the 2D block-tiling scheme from Simon Boehm's SGEMM write-up (kernel 5), adapted
-// to a bf16 right-hand side.
-template <int BM, int BN, int BK, int TM, int TN, bool kAccumulate>
+// to a bf16 or quantized right-hand side.
+template <class WLoad, int BM, int BN, int BK, int TM, int TN, bool kAccumulate>
 __global__ void __launch_bounds__((BM / TM) * (BN / TN))
-    GemmKernel(const float* __restrict__ A, const bf16* __restrict__ W, int T, int N, int K,
-               float* __restrict__ C) {
+    GemmKernel(const float* __restrict__ A, const Linear W, int T, float* __restrict__ C) {
+  const int N = W.rows;
+  const int K = W.cols;
   constexpr int kThreads = (BM / TM) * (BN / TN);
   static_assert(BM * BK / 4 == kThreads, "one float4 of A per thread per tile");
   static_assert(BN * BK / 4 == kThreads, "four bf16 of W per thread per tile");
@@ -103,17 +141,12 @@ __global__ void __launch_bounds__((BM / TM) * (BN / TN))
       As[lk + 2][lr] = a.z;
       As[lk + 3][lr] = a.w;
       const int n = n0 + lr;
-      float2 w01 = make_float2(0.f, 0.f);
-      float2 w23 = make_float2(0.f, 0.f);
-      if (n < N) {
-        const uint2 raw = *reinterpret_cast<const uint2*>(W + static_cast<size_t>(n) * K + k0 + lk);
-        w01 = __bfloat1622float2(*reinterpret_cast<const __nv_bfloat162*>(&raw.x));
-        w23 = __bfloat1622float2(*reinterpret_cast<const __nv_bfloat162*>(&raw.y));
-      }
-      Ws[lk + 0][lr] = w01.x;
-      Ws[lk + 1][lr] = w01.y;
-      Ws[lk + 2][lr] = w23.x;
-      Ws[lk + 3][lr] = w23.y;
+      float4 w = make_float4(0.f, 0.f, 0.f, 0.f);
+      if (n < N) w = WLoad::Load4(W, n, k0 + lk);
+      Ws[lk + 0][lr] = w.x;
+      Ws[lk + 1][lr] = w.y;
+      Ws[lk + 2][lr] = w.z;
+      Ws[lk + 3][lr] = w.w;
     }
     __syncthreads();
 
@@ -164,17 +197,30 @@ __global__ void __launch_bounds__((BM / TM) * (BN / TN))
   }
 }
 
-template <int BM, int BN, int BK, int TM, int TN>
-void LaunchGemm(const float* A, const bf16* W, int T, int N, int K, float* C, bool accumulate,
+template <class WLoad, int BM, int BN, int BK, int TM, int TN>
+void LaunchGemm(const float* A, const Linear& W, int T, float* C, bool accumulate,
                 cudaStream_t stream) {
-  const dim3 grid((N + BN - 1) / BN, (T + BM - 1) / BM);
+  const dim3 grid((W.rows + BN - 1) / BN, (T + BM - 1) / BM);
   constexpr int threads = (BM / TM) * (BN / TN);
   if (accumulate) {
-    GemmKernel<BM, BN, BK, TM, TN, true><<<grid, threads, 0, stream>>>(A, W, T, N, K, C);
+    GemmKernel<WLoad, BM, BN, BK, TM, TN, true><<<grid, threads, 0, stream>>>(A, W, T, C);
   } else {
-    GemmKernel<BM, BN, BK, TM, TN, false><<<grid, threads, 0, stream>>>(A, W, T, N, K, C);
+    GemmKernel<WLoad, BM, BN, BK, TM, TN, false><<<grid, threads, 0, stream>>>(A, W, T, C);
   }
   CUDA_CHECK_LAUNCH();
+}
+
+template <class WLoad>
+void GemmFormat(const float* A, const Linear& W, int T, float* C, bool accumulate,
+                cudaStream_t stream) {
+  // Big tiles reuse each loaded value more, but a short prompt would leave most SMs idle with
+  // them, so fall back to 64 x 64 tiles when 128 x 128 would give fewer than ~2 waves.
+  const long long big_tiles = static_cast<long long>((T + 127) / 128) * ((W.rows + 127) / 128);
+  if (big_tiles >= 140) {
+    LaunchGemm<WLoad, 128, 128, 8, 8, 8>(A, W, T, C, accumulate, stream);
+  } else {
+    LaunchGemm<WLoad, 64, 64, 16, 4, 4>(A, W, T, C, accumulate, stream);
+  }
 }
 
 // ---- Prefill attention, FlashAttention style ----
@@ -310,16 +356,18 @@ void RmsNorm(const float* x, const bf16* w, int T, int H, float eps, float* out,
   CUDA_CHECK_LAUNCH();
 }
 
-void Gemm(const float* A, const bf16* W, int T, int N, int K, float* C, bool accumulate,
-          cudaStream_t stream) {
-  if (K % 16 != 0) throw CudaError("gemm: K must be a multiple of 16");
-  // Big tiles reuse each loaded value more, but a short prompt would leave most SMs idle with
-  // them, so fall back to 64 x 64 tiles when 128 x 128 would give fewer than ~2 waves.
-  const long long big_tiles = static_cast<long long>((T + 127) / 128) * ((N + 127) / 128);
-  if (big_tiles >= 140) {
-    LaunchGemm<128, 128, 8, 8, 8>(A, W, T, N, K, C, accumulate, stream);
-  } else {
-    LaunchGemm<64, 64, 16, 4, 4>(A, W, T, N, K, C, accumulate, stream);
+void Gemm(const float* A, const Linear& W, int T, float* C, bool accumulate, cudaStream_t stream) {
+  if (W.cols % 16 != 0) throw CudaError("gemm: K must be a multiple of 16");
+  switch (W.format) {
+    case WeightFormat::kBf16:
+      GemmFormat<Bf16Load>(A, W, T, C, accumulate, stream);
+      break;
+    case WeightFormat::kInt8:
+      GemmFormat<Int8Load>(A, W, T, C, accumulate, stream);
+      break;
+    case WeightFormat::kInt4:
+      GemmFormat<Int4Load>(A, W, T, C, accumulate, stream);
+      break;
   }
 }
 

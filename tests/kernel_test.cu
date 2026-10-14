@@ -201,19 +201,19 @@ TEST_P(GemvTest, StoreAccumulateAndFusedNorm) {
   const auto Wx = test::CpuMatmul(x, W, 1, N, K);
 
   DeviceBuffer<float> d_y(N);
-  kernels::Gemv(d_x.get(), d_W.get(), N, K, d_y.get(), kernels::GemvOut::kStore, nullptr, 0.0f,
-                nullptr);
+  kernels::Gemv(d_x.get(), test::Bf16Linear(d_W.get(), N, K), d_y.get(), kernels::GemvOut::kStore,
+                nullptr, 0.0f, nullptr);
   ExpectClose(Download(d_y), Wx, 1e-4f, 1e-4f);
 
   d_y = Upload(y0);
-  kernels::Gemv(d_x.get(), d_W.get(), N, K, d_y.get(), kernels::GemvOut::kAccumulate, nullptr, 0.0f,
-                nullptr);
+  kernels::Gemv(d_x.get(), test::Bf16Linear(d_W.get(), N, K), d_y.get(),
+                kernels::GemvOut::kAccumulate, nullptr, 0.0f, nullptr);
   std::vector<float> want(N);
   for (int i = 0; i < N; ++i) want[i] = y0[i] + Wx[i];
   ExpectClose(Download(d_y), want, 1e-4f, 1e-4f);
 
-  kernels::Gemv(d_x.get(), d_W.get(), N, K, d_y.get(), kernels::GemvOut::kStore, d_nw.get(), 1e-5f,
-                nullptr);
+  kernels::Gemv(d_x.get(), test::Bf16Linear(d_W.get(), N, K), d_y.get(), kernels::GemvOut::kStore,
+                d_nw.get(), 1e-5f, nullptr);
   const auto normed = test::CpuRmsNorm(x, nw, 1, K, 1e-5f);
   ExpectClose(Download(d_y), test::CpuMatmul(normed, W, 1, N, K), 1e-4f, 1e-4f);
 }
@@ -227,8 +227,8 @@ TEST_P(GemvTest, SwiGlu) {
   auto d_W = Upload(ToBf16(W));
   auto d_nw = Upload(ToBf16(nw));
   DeviceBuffer<float> d_y(N);
-  kernels::Gemv(d_x.get(), d_W.get(), N, K, d_y.get(), kernels::GemvOut::kSwiGlu, d_nw.get(), 1e-5f,
-                nullptr);
+  kernels::Gemv(d_x.get(), test::Bf16Linear(d_W.get(), 2 * N, K), d_y.get(),
+                kernels::GemvOut::kSwiGlu, d_nw.get(), 1e-5f, nullptr);
   const auto normed = test::CpuRmsNorm(x, nw, 1, K, 1e-5f);
   const auto gu = test::CpuMatmul(normed, W, 1, 2 * N, K);
   ExpectClose(Download(d_y), test::CpuSwiGlu(gu, 1, N), 1e-4f, 1e-4f);
@@ -362,11 +362,11 @@ TEST_P(GemmTest, MatchesReference) {
   const auto want = test::CpuMatmul(x, W, T, N, K);
 
   DeviceBuffer<float> d_y(static_cast<size_t>(T) * N);
-  kernels::Gemm(d_x.get(), d_W.get(), T, N, K, d_y.get(), false, nullptr);
+  kernels::Gemm(d_x.get(), test::Bf16Linear(d_W.get(), N, K), T, d_y.get(), false, nullptr);
   ExpectClose(Download(d_y), want, 1e-4f, 1e-4f);
 
   d_y = Upload(y0);
-  kernels::Gemm(d_x.get(), d_W.get(), T, N, K, d_y.get(), true, nullptr);
+  kernels::Gemm(d_x.get(), test::Bf16Linear(d_W.get(), N, K), T, d_y.get(), true, nullptr);
   std::vector<float> sum(want.size());
   for (size_t i = 0; i < want.size(); ++i) sum[i] = y0[i] + want[i];
   ExpectClose(Download(d_y), sum, 1e-4f, 1e-4f);

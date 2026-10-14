@@ -13,6 +13,7 @@
 #include <vector>
 
 #include "infer/cuda_util.h"
+#include "infer/kernels.h"
 
 namespace infer::test {
 
@@ -70,6 +71,10 @@ inline void ExpectClose(const std::vector<float>& got, const std::vector<float>&
   }
   EXPECT_LE(worst_excess, 0.0) << "element " << worst << ": got " << got[worst] << ", want "
                                << want[worst];
+}
+
+inline kernels::Linear Bf16Linear(const bf16* w, int rows, int cols) {
+  return kernels::Linear{kernels::WeightFormat::kBf16, w, nullptr, rows, cols};
 }
 
 // ---- CPU reference ops (same conventions as include/infer/kernels.h) ----

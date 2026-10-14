@@ -13,11 +13,41 @@
 #pragma once
 
 #include <cuda_bf16.h>
+#include <cuda_fp16.h>
 #include <cuda_runtime.h>
+
+#include <cstdint>
 
 namespace infer::kernels {
 
 using bf16 = __nv_bfloat16;
+
+// How a projection's weights are stored.
+enum class WeightFormat {
+  kBf16,  // as shipped
+  kInt8,  // one fp32 scale per row: w = q * scale[row], q in [-127, 127]
+  kInt4,  // one fp16 scale per 128 weights of a row: w = q * scale[row][k / 128], q in [-8, 7]
+};
+
+constexpr int kInt4Group = 128;
+
+// A projection W [rows, cols], computing y = W x:
+//   kBf16  data: bf16[rows * cols]
+//   kInt8  data: int8[rows * cols];          scales: float[rows]
+//   kInt4  data: uint8[rows * cols / 2], two weights per byte, element 2j in the low nibble,
+//          each stored as q + 8;            scales: __half[rows * cols / 128]
+struct Linear {
+  WeightFormat format = WeightFormat::kBf16;
+  const void* data = nullptr;
+  const void* scales = nullptr;
+  int rows = 0;
+  int cols = 0;
+};
+
+// Quantizes a bf16 matrix [rows, cols]. See quant.cu for the exact rule.
+void QuantizeInt8(const bf16* w, int rows, int cols, int8_t* q, float* scales, cudaStream_t stream);
+void QuantizeInt4(const bf16* w, int rows, int cols, uint8_t* q, __half* scales,
+                  cudaStream_t stream);
 
 // out[t, :] = table[tokens[t], :]
 void Embedding(const bf16* table, const int* tokens, int T, int H, float* out, cudaStream_t stream);
@@ -65,10 +95,9 @@ void Argmax(const float* logits, int V, int* out, cudaStream_t stream);
 void RmsNorm(const float* x, const bf16* w, int T, int H, float eps, float* out,
              cudaStream_t stream);
 
-// C[T, N] (+)= A[T, K] x W[N, K]^T, shared-memory tiled with register blocking.
-// K must be a multiple of 16.
-void Gemm(const float* A, const bf16* W, int T, int N, int K, float* C, bool accumulate,
-          cudaStream_t stream);
+// C[T, N] (+)= A[T, K] x W[N, K]^T, shared-memory tiled with register blocking; N = W.rows,
+// K = W.cols, quantized weights dequantized as they are loaded. K must be a multiple of 16.
+void Gemm(const float* A, const Linear& W, int T, float* C, bool accumulate, cudaStream_t stream);
 
 // Same contract as AttentionNaive, FlashAttention-style: tiles of keys through shared memory
 // with an online softmax, never materialising the T x T score matrix. head_dim must be 64.
@@ -84,11 +113,11 @@ enum class GemvOut {
   kSwiGlu,      // W is [2N, K] gate rows then up rows; y[i] = silu(gate_i . x) * (up_i . x)
 };
 
-// Matrix-vector product, W [N, K] (or [2N, K] for kSwiGlu), x [K], y [N]. If norm_w is not
-// null, x is RMS-normalised and scaled by norm_w first (fused RMSNorm). K must be a multiple
-// of 8 and at most 12288.
-void Gemv(const float* x, const bf16* W, int N, int K, float* y, GemvOut out, const bf16* norm_w,
-          float eps, cudaStream_t stream);
+// Matrix-vector product with W [N, K] = [W.rows, W.cols] (kSwiGlu: N = W.rows / 2), x [K],
+// y [N]. If norm_w is not null, x is RMS-normalised and scaled by norm_w first (fused
+// RMSNorm). K must be at most 12288 and a multiple of 8 (bf16), 16 (int8) or 32 (int4).
+void Gemv(const float* x, const Linear& W, float* y, GemvOut out, const bf16* norm_w, float eps,
+          cudaStream_t stream);
 
 // Decode kernels read the current position from device memory (*pos), so that one captured
 // CUDA graph can be replayed at every step.
