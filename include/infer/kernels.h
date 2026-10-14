@@ -59,4 +59,56 @@ void SwiGlu(const float* gate_up, int T, int I, float* out, cudaStream_t stream)
 // out[0] = index of the largest logit (lowest index on ties).
 void Argmax(const float* logits, int V, int* out, cudaStream_t stream);
 
+// ---- Optimized decode kernels (one token at a time) ----
+
+enum class GemvOut {
+  kStore,       // y = W x
+  kAccumulate,  // y += W x (residual connection)
+  kSwiGlu,      // W is [2N, K] gate rows then up rows; y[i] = silu(gate_i . x) * (up_i . x)
+};
+
+// Matrix-vector product, W [N, K] (or [2N, K] for kSwiGlu), x [K], y [N]. If norm_w is not
+// null, x is RMS-normalised and scaled by norm_w first (fused RMSNorm). K must be a multiple
+// of 8 and at most 12288.
+void Gemv(const float* x, const bf16* W, int N, int K, float* y, GemvOut out, const bf16* norm_w,
+          float eps, cudaStream_t stream);
+
+// Decode kernels read the current position from device memory (*pos), so that one captured
+// CUDA graph can be replayed at every step.
+
+// Rotates q and k of the single qkv row by position *pos, leaves q in place and writes k and v
+// to the cache at *pos (layout as KvCacheWrite).
+void RopeKvDecode(float* qkv, int num_heads, int num_kv_heads, int head_dim, const float* inv_freq,
+                  const int* pos, int max_seq, bf16* k_cache, bf16* v_cache, cudaStream_t stream);
+
+// Workspace for AttentionDecode: num_heads * num_splits * (head_dim + 2) floats.
+size_t AttentionDecodeWorkspace(int num_heads, int head_dim, int num_splits);
+
+// Split-KV ("Flash-Decoding") attention for one query at position *pos against cache
+// positions 0..*pos. The positions are cut into num_splits ranges processed by separate blocks
+// (so a long context still fills the GPU), each producing a partial softmax; a second kernel
+// combines them. One block serves all query heads that share a KV head, so each K/V row is
+// read from memory once per step, not once per query head.
+void AttentionDecode(const float* q, int num_heads, int num_kv_heads, int head_dim,
+                     const bf16* k_cache, const bf16* v_cache, int max_seq, const int* pos,
+                     int num_splits, float* workspace, float* out, cudaStream_t stream);
+
+// *pos += 1.
+void AdvancePosition(int* pos, cudaStream_t stream);
+
+// *pos = value.
+void SetPosition(int* pos, int value, cudaStream_t stream);
+
+// history[*pos] = *token: records the token about to be run at the current position.
+void StoreToken(const int* token, int* history, const int* pos, cudaStream_t stream);
+
+// Argmax over many blocks. Each block finds its local best and merges it into *best with one
+// 64-bit atomicMax on (order-preserving float bits << 32 | ~index), so ties go to the lowest
+// index. *best must be 0 beforehand; ArgmaxFinish leaves it 0 again.
+void ArgmaxPartial(const float* logits, int V, unsigned long long* best, cudaStream_t stream);
+
+// *token = index held in *best; history[*pos] = *token; *best = 0.
+void ArgmaxFinish(unsigned long long* best, int* token, int* history, const int* pos,
+                  cudaStream_t stream);
+
 }  // namespace infer::kernels

@@ -48,6 +48,8 @@ if(INFER_ENABLE_CUDA)
 
   add_library(infer_cuda
     src/engine.cpp
+    src/kernels/decode.cu
+    src/kernels/gemv.cu
     src/kernels/naive.cu
     src/model.cpp
   )

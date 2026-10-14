@@ -173,3 +173,168 @@ TEST(KernelTest, ArgmaxPicksLowestIndexOnTies) {
 
 }  // namespace
 }  // namespace infer
+
+// ---- Optimized decode kernels ----
+
+namespace infer {
+namespace {
+
+using test::bf16;
+using test::Download;
+using test::ExpectClose;
+using test::RandomFloats;
+using test::RoundTripBf16;
+using test::ToBf16;
+using test::Upload;
+
+class GemvTest : public ::testing::TestWithParam<std::tuple<int, int>> {};
+
+TEST_P(GemvTest, StoreAccumulateAndFusedNorm) {
+  const auto [N, K] = GetParam();
+  const auto x = RandomFloats(K, 1.0f, 20);
+  const auto W = RoundTripBf16(RandomFloats(static_cast<size_t>(N) * K, 0.05f, 21));
+  const auto nw = RoundTripBf16(RandomFloats(K, 1.0f, 22));
+  const auto y0 = RandomFloats(N, 1.0f, 23);
+  auto d_x = Upload(x);
+  auto d_W = Upload(ToBf16(W));
+  auto d_nw = Upload(ToBf16(nw));
+  const auto Wx = test::CpuMatmul(x, W, 1, N, K);
+
+  DeviceBuffer<float> d_y(N);
+  kernels::Gemv(d_x.get(), d_W.get(), N, K, d_y.get(), kernels::GemvOut::kStore, nullptr, 0.0f,
+                nullptr);
+  ExpectClose(Download(d_y), Wx, 1e-4f, 1e-4f);
+
+  d_y = Upload(y0);
+  kernels::Gemv(d_x.get(), d_W.get(), N, K, d_y.get(), kernels::GemvOut::kAccumulate, nullptr, 0.0f,
+                nullptr);
+  std::vector<float> want(N);
+  for (int i = 0; i < N; ++i) want[i] = y0[i] + Wx[i];
+  ExpectClose(Download(d_y), want, 1e-4f, 1e-4f);
+
+  kernels::Gemv(d_x.get(), d_W.get(), N, K, d_y.get(), kernels::GemvOut::kStore, d_nw.get(), 1e-5f,
+                nullptr);
+  const auto normed = test::CpuRmsNorm(x, nw, 1, K, 1e-5f);
+  ExpectClose(Download(d_y), test::CpuMatmul(normed, W, 1, N, K), 1e-4f, 1e-4f);
+}
+
+TEST_P(GemvTest, SwiGlu) {
+  const auto [N, K] = GetParam();
+  const auto x = RandomFloats(K, 1.0f, 24);
+  const auto W = RoundTripBf16(RandomFloats(static_cast<size_t>(2 * N) * K, 0.05f, 25));
+  const auto nw = RoundTripBf16(RandomFloats(K, 1.0f, 26));
+  auto d_x = Upload(x);
+  auto d_W = Upload(ToBf16(W));
+  auto d_nw = Upload(ToBf16(nw));
+  DeviceBuffer<float> d_y(N);
+  kernels::Gemv(d_x.get(), d_W.get(), N, K, d_y.get(), kernels::GemvOut::kSwiGlu, d_nw.get(), 1e-5f,
+                nullptr);
+  const auto normed = test::CpuRmsNorm(x, nw, 1, K, 1e-5f);
+  const auto gu = test::CpuMatmul(normed, W, 1, 2 * N, K);
+  ExpectClose(Download(d_y), test::CpuSwiGlu(gu, 1, N), 1e-4f, 1e-4f);
+}
+
+// (N, K): Llama-1B decode shapes, the tiny model's MLP (K not a multiple of 256), odd N.
+INSTANTIATE_TEST_SUITE_P(Shapes, GemvTest,
+                         ::testing::Values(std::make_tuple(3072, 2048), std::make_tuple(2048, 8192),
+                                           std::make_tuple(512, 1408), std::make_tuple(1001, 512),
+                                           std::make_tuple(17, 64)));
+
+TEST(DecodeKernelTest, RopeKvDecodeMatchesNaiveRopeAndCacheWrite) {
+  const int nh = 32, nkv = 8, hd = 64, max_seq = 40, pos = 37;
+  const int stride = (nh + 2 * nkv) * hd;
+  const auto row = RandomFloats(stride, 1.0f, 27);
+  std::vector<float> inv_freq(hd / 2);
+  for (int i = 0; i < hd / 2; ++i)
+    inv_freq[i] = static_cast<float>(std::pow(500000.0, -2.0 * i / hd));
+  auto d_freq = Upload(inv_freq);
+  auto d_pos = Upload(std::vector<int>{pos});
+  const size_t cache = static_cast<size_t>(nkv) * max_seq * hd;
+
+  // Optimized: one fused kernel.
+  auto d_a = Upload(row);
+  DeviceBuffer<bf16> ka(cache), va(cache);
+  CUDA_CHECK(cudaMemset(ka.get(), 0, ka.bytes()));
+  CUDA_CHECK(cudaMemset(va.get(), 0, va.bytes()));
+  kernels::RopeKvDecode(d_a.get(), nh, nkv, hd, d_freq.get(), d_pos.get(), max_seq, ka.get(),
+                        va.get(), nullptr);
+
+  // Naive: rope, then cache write.
+  auto d_b = Upload(row);
+  DeviceBuffer<bf16> kb(cache), vb(cache);
+  CUDA_CHECK(cudaMemset(kb.get(), 0, kb.bytes()));
+  CUDA_CHECK(cudaMemset(vb.get(), 0, vb.bytes()));
+  kernels::RopeNaive(d_b.get(), 1, nh, nkv, hd, d_freq.get(), pos, nullptr);
+  kernels::KvCacheWrite(d_b.get(), 1, nh, nkv, hd, pos, max_seq, kb.get(), vb.get(), nullptr);
+
+  // q must match exactly (same arithmetic); k and v in the cache too.
+  const auto qa = Download(d_a);
+  const auto qb = Download(d_b);
+  for (int i = 0; i < nh * hd; ++i) ASSERT_EQ(qa[i], qb[i]) << i;
+  const auto kav = Download(ka), kbv = Download(kb), vav = Download(va), vbv = Download(vb);
+  for (size_t i = 0; i < cache; ++i) {
+    ASSERT_EQ(__bfloat162float(kav[i]), __bfloat162float(kbv[i])) << i;
+    ASSERT_EQ(__bfloat162float(vav[i]), __bfloat162float(vbv[i])) << i;
+  }
+}
+
+class AttentionDecodeTest : public ::testing::TestWithParam<std::tuple<int, int, int, int>> {};
+
+TEST_P(AttentionDecodeTest, SplitKvMatchesReference) {
+  const auto [past, nh, nkv, splits] = GetParam();
+  const int hd = 64;
+  AttentionCase c(1, past, nh, nkv, hd, 30);
+  auto d_pos = Upload(std::vector<int>{past});
+  DeviceBuffer<float> ws(kernels::AttentionDecodeWorkspace(nh, hd, splits));
+  DeviceBuffer<float> d_out(static_cast<size_t>(nh) * hd);
+  kernels::AttentionDecode(c.new_rows(), nh, nkv, hd, c.k_cache.get(), c.v_cache.get(), c.max_seq,
+                           d_pos.get(), splits, ws.get(), d_out.get(), nullptr);
+  ExpectClose(Download(d_out), c.want, 1e-5f, 1e-4f);
+}
+
+// (past positions, num_heads, num_kv_heads, num_splits). Covers: a single position, splits
+// with no positions at all (past + 1 < splits), tiles that are partly filled, and long
+// contexts.
+INSTANTIATE_TEST_SUITE_P(
+    Shapes, AttentionDecodeTest,
+    ::testing::Values(std::make_tuple(0, 32, 8, 16), std::make_tuple(5, 32, 8, 16),
+                      std::make_tuple(100, 32, 8, 1), std::make_tuple(300, 32, 8, 16),
+                      std::make_tuple(2047, 32, 8, 16), std::make_tuple(777, 8, 2, 7),
+                      std::make_tuple(64, 8, 8, 3), std::make_tuple(129, 16, 2, 4)));
+
+TEST(DecodeKernelTest, ArgmaxPartialFindsMaxLowestIndexAndResets) {
+  const int V = 128256;
+  DeviceBuffer<unsigned long long> best(1);
+  CUDA_CHECK(cudaMemset(best.get(), 0, best.bytes()));
+  DeviceBuffer<int> token(1);
+  DeviceBuffer<int> history(4);
+  auto d_pos = Upload(std::vector<int>{2});
+
+  auto run = [&](const std::vector<float>& logits) {
+    auto d = Upload(logits);
+    kernels::ArgmaxPartial(d.get(), static_cast<int>(logits.size()), best.get(), nullptr);
+    kernels::ArgmaxFinish(best.get(), token.get(), history.get(), d_pos.get(), nullptr);
+    const int t = Download(token)[0];
+    EXPECT_EQ(Download(history)[2], t);
+    EXPECT_EQ(Download(best)[0], 0ull) << "best must be reset for the next step";
+    return t;
+  };
+
+  std::vector<float> logits = RandomFloats(V, 1.0f, 40);
+  logits[90000] = 9.0f;
+  logits[1234] = 9.0f;  // tie: the lower index wins
+  EXPECT_EQ(run(logits), 1234);
+
+  // All negative, max at the very end.
+  for (float& x : logits) x = -std::abs(x) - 1.0f;
+  logits[V - 1] = -0.5f;
+  EXPECT_EQ(run(logits), V - 1);
+
+  // Index 0, and a vocabulary that is not a multiple of the block size.
+  std::vector<float> small = RandomFloats(4099, 1.0f, 41);
+  small[0] = 100.0f;
+  EXPECT_EQ(run(small), 0);
+}
+
+}  // namespace
+}  // namespace infer
