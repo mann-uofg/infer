@@ -10,7 +10,7 @@ CLAUDE.md
 .claude/
 
 # Model weights and tokenizer files (downloaded, never committed)
-models/
+models
 *.safetensors
 *.gguf
 
