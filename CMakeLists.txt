@@ -49,6 +49,7 @@ if(INFER_ENABLE_CUDA)
   add_library(infer_cuda
     src/engine.cpp
     src/kernels/decode.cu
+    src/kernels/eval.cu
     src/kernels/gemv.cu
     src/kernels/naive.cu
     src/kernels/prefill.cu
@@ -60,6 +61,9 @@ if(INFER_ENABLE_CUDA)
 
   add_executable(infer src/main.cpp)
   target_link_libraries(infer PRIVATE infer_cuda infer_options)
+
+  add_executable(perplexity tools/perplexity.cpp)
+  target_link_libraries(perplexity PRIVATE infer_cuda infer_options)
 
   add_executable(device_info tools/device_info.cpp)
   target_link_libraries(device_info PRIVATE infer_options CUDA::cudart)

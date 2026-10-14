@@ -73,6 +73,8 @@ class Engine {
 
   // Copies the last `rows` rows of logits produced by the last Prefill/Decode to the host.
   std::vector<float> Logits(int rows = 1);
+  // The logits of the last Prefill/Decode on the device: [rows, V], rows as above.
+  const float* LogitsDevice() const { return logits_.get(); }
 
   // Runs n decode steps, each fed the argmax of the previous step's logits (the first one
   // takes the argmax of the last Prefill/Decode). Returns the n tokens fed in. The tokens stay

@@ -89,6 +89,10 @@ void SwiGlu(const float* gate_up, int T, int I, float* out, cudaStream_t stream)
 // out[0] = index of the largest logit (lowest index on ties).
 void Argmax(const float* logits, int V, int* out, cudaStream_t stream);
 
+// nll[r] = -log softmax(logits[r])[targets[r]] for each of `rows` rows of [rows, V] logits.
+void CrossEntropy(const float* logits, int rows, int V, const int* targets, float* nll,
+                  cudaStream_t stream);
+
 // ---- Optimized prefill kernels (many tokens at once) ----
 
 // Same as RmsNormNaive, one block per row with vector loads. H must be a multiple of 4.
