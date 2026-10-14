@@ -47,9 +47,14 @@ if(INFER_ENABLE_CUDA)
   find_package(CUDAToolkit REQUIRED)
 
   add_library(infer_cuda
+    src/engine.cpp
     src/kernels/naive.cu
+    src/model.cpp
   )
   target_link_libraries(infer_cuda PUBLIC infer_host CUDA::cudart PRIVATE infer_options)
+
+  add_executable(infer src/main.cpp)
+  target_link_libraries(infer PRIVATE infer_cuda infer_options)
 
   add_executable(device_info tools/device_info.cpp)
   target_link_libraries(device_info PRIVATE infer_options CUDA::cudart)
