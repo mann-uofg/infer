@@ -135,16 +135,26 @@ class Runner {
   std::ofstream json_;
 };
 
-void BenchMatmul(Runner& r, const std::string& name, int T, int N, int K) {
+// Decode projections. `swiglu` means W holds 2N rows (gate and up) and produces N outputs.
+// The optimized variant is run the way the engine runs it: with the fused RMSNorm where the
+// engine fuses one (qkv, gate_up, lm_head) and the residual add where it adds one (o, down).
+void BenchGemv(Runner& r, const std::string& name, int N, int K, k::GemvOut out, bool norm) {
   if (!r.Wanted(name)) return;
-  const size_t wbytes = static_cast<size_t>(N) * K * sizeof(bf16);
+  const int rows = out == k::GemvOut::kSwiGlu ? 2 * N : N;
+  const size_t wbytes = static_cast<size_t>(rows) * K * sizeof(bf16);
   const int copies = CopiesFor(wbytes);
-  Rotation<bf16> W(static_cast<size_t>(N) * K, copies, 1);
-  Rotation<float> x(static_cast<size_t>(T) * K, copies, 2);
-  DeviceBuffer<float> y(static_cast<size_t>(T) * N);
-  const double bytes = static_cast<double>(wbytes) + 4.0 * T * (K + N);
+  Rotation<bf16> W(static_cast<size_t>(rows) * K, copies, 1);
+  Rotation<float> x(static_cast<size_t>(K), copies, 2);
+  Rotation<bf16> nw(static_cast<size_t>(K), copies, 3);
+  DeviceBuffer<float> y(static_cast<size_t>(rows));
+  DeviceBuffer<float> act(static_cast<size_t>(N));
+  const double bytes = static_cast<double>(wbytes) + 4.0 * (K + rows);
   r.Report(name, "naive", bytes, TimeUs([&](int i, cudaStream_t st) {
-             k::MatmulNaive(x.get(i), W.get(i), T, N, K, y.get(), false, st);
+             k::MatmulNaive(x.get(i), W.get(i), 1, rows, K, y.get(), false, st);
+           }));
+  r.Report(name, "optimized", bytes, TimeUs([&](int i, cudaStream_t st) {
+             k::Gemv(x.get(i), W.get(i), N, K, out == k::GemvOut::kSwiGlu ? act.get() : y.get(),
+                     out, norm ? nw.get(i) : nullptr, 1e-5f, st);
            }));
 }
 
@@ -176,6 +186,16 @@ void BenchAttention(Runner& r, int ctx) {
              k::AttentionNaive(qkv.get(i), 1, ctx - 1, NH, NKV, HD, kc.get(i), vc.get(i), max_seq,
                                out.get(), st);
            }));
+  DeviceBuffer<int> pos(1);
+  const int last = ctx - 1;
+  CUDA_CHECK(cudaMemcpy(pos.get(), &last, sizeof(int), cudaMemcpyHostToDevice));
+  for (int splits : {8, 16, 32, 64}) {
+    DeviceBuffer<float> ws(k::AttentionDecodeWorkspace(NH, HD, splits));
+    r.Report(name, "split" + std::to_string(splits), bytes, TimeUs([&](int i, cudaStream_t st) {
+               k::AttentionDecode(qkv.get(i), NH, NKV, HD, kc.get(i), vc.get(i), max_seq, pos.get(),
+                                  splits, ws.get(), out.get(), st);
+             }));
+  }
 }
 
 void BenchSmallOps(Runner& r) {
@@ -223,11 +243,11 @@ int main(int argc, char** argv) {
   }
   try {
     Runner r(opt);
-    BenchMatmul(r, "gemv qkv 3072x2048", 1, QKV, H);
-    BenchMatmul(r, "gemv o 2048x2048", 1, H, NH * HD);
-    BenchMatmul(r, "gemv gate_up 16384x2048", 1, 2 * I, H);
-    BenchMatmul(r, "gemv down 2048x8192", 1, H, I);
-    BenchMatmul(r, "gemv lm_head 128256x2048", 1, V, H);
+    BenchGemv(r, "gemv qkv 3072x2048", QKV, H, k::GemvOut::kStore, true);
+    BenchGemv(r, "gemv o 2048x2048", H, NH * HD, k::GemvOut::kAccumulate, false);
+    BenchGemv(r, "gemv gate_up 16384x2048", I, H, k::GemvOut::kSwiGlu, true);
+    BenchGemv(r, "gemv down 2048x8192", H, I, k::GemvOut::kAccumulate, false);
+    BenchGemv(r, "gemv lm_head 128256x2048", V, H, k::GemvOut::kStore, true);
     BenchRmsNorm(r);
     BenchAttention(r, 512);
     BenchAttention(r, 2048);

@@ -44,7 +44,8 @@ struct Args {
   int runs = 5;
   int warmup = 1;
   double peak_gbps = 0.0;
-  std::string backend = "naive";
+  std::string backend = "optimized";
+  bool graph = true;
   std::string json;
   std::string label;
   bool profile_step = false;
@@ -90,6 +91,8 @@ Args ParseArgs(int argc, char** argv) {
       a.peak_gbps = std::stod(v);
     } else if (flag == "--backend") {
       a.backend = v;
+    } else if (flag == "--graph") {
+      a.graph = v != "off";
     } else if (flag == "--json") {
       a.json = v;
     } else if (flag == "--label") {
@@ -100,12 +103,6 @@ Args ParseArgs(int argc, char** argv) {
   }
   if (a.model.empty() || a.contexts.empty() || a.generate < 1 || a.runs < 1) Usage();
   return a;
-}
-
-infer::Backend ParseBackend(const std::string& s) {
-  if (s == "naive") return infer::Backend::kNaive;
-  std::fprintf(stderr, "unknown backend %s\n", s.c_str());
-  std::exit(2);
 }
 
 struct Stats {
@@ -149,7 +146,8 @@ int main(int argc, char** argv) {
     const int max_ctx = *std::max_element(args.contexts.begin(), args.contexts.end());
     infer::EngineOptions opt;
     opt.max_seq = max_ctx + args.generate;
-    opt.backend = ParseBackend(args.backend);
+    opt.backend = infer::ParseBackend(args.backend);
+    opt.cuda_graph = args.graph;
     infer::Engine engine(cfg, weights, opt);
 
     if (args.profile_step) {
@@ -216,10 +214,10 @@ int main(int argc, char** argv) {
 
       if (json.is_open()) {
         json << "{\"label\":\"" << args.label << "\",\"backend\":\"" << args.backend
-             << "\",\"context\":" << ctx << ",\"generate\":" << args.generate
-             << ",\"runs\":" << args.runs << ",\"ttft_ms_median\":" << p.median
-             << ",\"ttft_ms_min\":" << p.min << ",\"ttft_ms_max\":" << p.max
-             << ",\"prefill_tok_s\":" << ctx / (p.median / 1e3)
+             << "\",\"graph\":\"" << (args.graph ? "on" : "off") << "\",\"context\":" << ctx
+             << ",\"generate\":" << args.generate << ",\"runs\":" << args.runs
+             << ",\"ttft_ms_median\":" << p.median << ",\"ttft_ms_min\":" << p.min
+             << ",\"ttft_ms_max\":" << p.max << ",\"prefill_tok_s\":" << ctx / (p.median / 1e3)
              << ",\"decode_tok_s_median\":" << d.median << ",\"decode_tok_s_min\":" << d.min
              << ",\"decode_tok_s_max\":" << d.max << ",\"step_bytes\":" << step_bytes
              << ",\"decode_gbps\":" << gbps << ",\"pct_peak\":" << pct << "}\n";
