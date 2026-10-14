@@ -29,6 +29,7 @@ struct Args {
   int max_tokens = 0;
   std::string backend = "optimized";
   bool graph = true;
+  infer::LoadOptions load;
   infer::Sampling sampling;
 };
 
@@ -65,6 +66,10 @@ Args ParseArgs(int argc, char** argv) {
       a.dump = value;
     } else if (flag == "--backend") {
       a.backend = value;
+    } else if (flag == "--weights") {
+      a.load.format = infer::ParseWeightFormat(value);
+    } else if (flag == "--quant-lm-head") {
+      a.load.quantize_lm_head = value != "off";
     } else if (flag == "--graph") {
       a.graph = value != "off";
     } else if (flag == "--temperature") {
@@ -104,7 +109,7 @@ int main(int argc, char** argv) {
     const auto t0 = std::chrono::steady_clock::now();
     const infer::ModelConfig cfg = infer::ModelConfig::FromJsonFile(
         (std::filesystem::path(args.model) / "config.json").string());
-    const infer::Weights weights = infer::Weights::Load(args.model, cfg);
+    const infer::Weights weights = infer::Weights::Load(args.model, cfg, args.load);
     const auto t1 = std::chrono::steady_clock::now();
     std::fprintf(stderr, "loaded %.2f GB of weights in %.2f s\n",
                  static_cast<double>(weights.device_bytes()) / 1e9, Seconds(t0, t1));

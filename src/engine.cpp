@@ -84,12 +84,12 @@ void Engine::RunPrefill(int T, bool all_logits, std::vector<std::vector<float>>*
       k::RmsNorm(in, w, rows, H, eps, out, stream_);
     }
   };
-  // out[T, N] (+)= in[T, K] x W^T
-  auto project = [&](const float* in, const bf16* W, int N, int K, float* out, bool accumulate) {
+  // out[T, W.rows] (+)= in[T, W.cols] x W^T
+  auto project = [&](const float* in, const Linear& W, float* out, bool accumulate) {
     if (naive) {
-      k::MatmulNaive(in, W, T, N, K, out, accumulate, stream_);
+      k::MatmulNaive(in, Bf16Data(W), T, W.rows, W.cols, out, accumulate, stream_);
     } else {
-      k::Gemm(in, W, T, N, K, out, accumulate, stream_);
+      k::Gemm(in, W, T, out, accumulate, stream_);
     }
   };
 
@@ -101,7 +101,7 @@ void Engine::RunPrefill(int T, bool all_logits, std::vector<std::vector<float>>*
 
     // Attention block: x += o_proj(attention(rope(qkv_proj(norm(x)))))
     norm(x_.get(), l.attn_norm, T, h_.get());
-    project(h_.get(), l.wqkv, cfg_.qkv_dim(), H, qkv_.get(), false);
+    project(h_.get(), l.wqkv, qkv_.get(), false);
     k::RopeNaive(qkv_.get(), T, cfg_.num_heads, cfg_.num_kv_heads, cfg_.head_dim, w_.rope_inv_freq,
                  pos_, stream_);
     k::KvCacheWrite(qkv_.get(), T, cfg_.num_heads, cfg_.num_kv_heads, cfg_.head_dim, pos_,
@@ -113,13 +113,13 @@ void Engine::RunPrefill(int T, bool all_logits, std::vector<std::vector<float>>*
       k::AttentionPrefill(qkv_.get(), T, pos_, cfg_.num_heads, cfg_.num_kv_heads, cfg_.head_dim,
                           KCache(i), VCache(i), opt_.max_seq, attn_.get(), stream_);
     }
-    project(attn_.get(), l.wo, H, cfg_.q_dim(), x_.get(), true);
+    project(attn_.get(), l.wo, x_.get(), true);
 
     // MLP block: x += down_proj(silu(gate_proj(norm(x))) * up_proj(norm(x)))
     norm(x_.get(), l.mlp_norm, T, h_.get());
-    project(h_.get(), l.w_gate_up, 2 * I, H, gate_up_.get(), false);
+    project(h_.get(), l.w_gate_up, gate_up_.get(), false);
     k::SwiGlu(gate_up_.get(), T, I, act_.get(), stream_);
-    project(act_.get(), l.w_down, H, I, x_.get(), true);
+    project(act_.get(), l.w_down, x_.get(), true);
     dump();
   }
 
@@ -128,13 +128,13 @@ void Engine::RunPrefill(int T, bool all_logits, std::vector<std::vector<float>>*
   const float* last = x_.get() + static_cast<size_t>(T - rows) * H;
   if (naive) {
     k::RmsNormNaive(last, w_.final_norm, rows, H, eps, h_.get(), stream_);
-    k::MatmulNaive(h_.get(), w_.lm_head, rows, cfg_.vocab_size, H, logits_.get(), false, stream_);
+    k::MatmulNaive(h_.get(), Bf16Data(w_.lm_head), rows, cfg_.vocab_size, H, logits_.get(), false,
+                   stream_);
   } else if (rows == 1) {
-    k::Gemv(last, w_.lm_head, cfg_.vocab_size, H, logits_.get(), k::GemvOut::kStore, w_.final_norm,
-            eps, stream_);
+    k::Gemv(last, w_.lm_head, logits_.get(), k::GemvOut::kStore, w_.final_norm, eps, stream_);
   } else {
     k::RmsNorm(last, w_.final_norm, rows, H, eps, h_.get(), stream_);
-    k::Gemm(h_.get(), w_.lm_head, rows, cfg_.vocab_size, H, logits_.get(), false, stream_);
+    k::Gemm(h_.get(), w_.lm_head, rows, logits_.get(), false, stream_);
   }
 }
 
@@ -148,21 +148,22 @@ void Engine::EnqueueDecodeStepNaive() {
   for (int i = 0; i < cfg_.num_layers; ++i) {
     const LayerWeights& l = w_.layers[static_cast<size_t>(i)];
     k::RmsNormNaive(x_.get(), l.attn_norm, 1, H, eps, h_.get(), stream_);
-    k::MatmulNaive(h_.get(), l.wqkv, 1, cfg_.qkv_dim(), H, qkv_.get(), false, stream_);
+    k::MatmulNaive(h_.get(), Bf16Data(l.wqkv), 1, cfg_.qkv_dim(), H, qkv_.get(), false, stream_);
     k::RopeNaive(qkv_.get(), 1, cfg_.num_heads, cfg_.num_kv_heads, cfg_.head_dim, w_.rope_inv_freq,
                  pos_, stream_);
     k::KvCacheWrite(qkv_.get(), 1, cfg_.num_heads, cfg_.num_kv_heads, cfg_.head_dim, pos_,
                     opt_.max_seq, KCache(i), VCache(i), stream_);
     k::AttentionNaive(qkv_.get(), 1, pos_, cfg_.num_heads, cfg_.num_kv_heads, cfg_.head_dim,
                       KCache(i), VCache(i), opt_.max_seq, attn_.get(), stream_);
-    k::MatmulNaive(attn_.get(), l.wo, 1, H, cfg_.q_dim(), x_.get(), true, stream_);
+    k::MatmulNaive(attn_.get(), Bf16Data(l.wo), 1, H, cfg_.q_dim(), x_.get(), true, stream_);
     k::RmsNormNaive(x_.get(), l.mlp_norm, 1, H, eps, h_.get(), stream_);
-    k::MatmulNaive(h_.get(), l.w_gate_up, 1, 2 * I, H, gate_up_.get(), false, stream_);
+    k::MatmulNaive(h_.get(), Bf16Data(l.w_gate_up), 1, 2 * I, H, gate_up_.get(), false, stream_);
     k::SwiGlu(gate_up_.get(), 1, I, act_.get(), stream_);
-    k::MatmulNaive(act_.get(), l.w_down, 1, H, I, x_.get(), true, stream_);
+    k::MatmulNaive(act_.get(), Bf16Data(l.w_down), 1, H, I, x_.get(), true, stream_);
   }
   k::RmsNormNaive(x_.get(), w_.final_norm, 1, H, eps, h_.get(), stream_);
-  k::MatmulNaive(h_.get(), w_.lm_head, 1, cfg_.vocab_size, H, logits_.get(), false, stream_);
+  k::MatmulNaive(h_.get(), Bf16Data(w_.lm_head), 1, cfg_.vocab_size, H, logits_.get(), false,
+                 stream_);
   k::SetPosition(d_pos_.get(), pos_ + 1, stream_);
 }
 
@@ -170,29 +171,25 @@ void Engine::EnqueueDecodeStepNaive() {
 // a GEMV, the position read from device memory.
 void Engine::EnqueueDecodeStep() {
   const int H = cfg_.hidden_size;
-  const int I = cfg_.intermediate_size;
   const float eps = cfg_.rms_norm_eps;
   k::Embedding(w_.embed, token_.get(), 1, H, x_.get(), stream_);
   for (int i = 0; i < cfg_.num_layers; ++i) {
     const LayerWeights& l = w_.layers[static_cast<size_t>(i)];
     // qkv = Wqkv * norm(x)
-    k::Gemv(x_.get(), l.wqkv, cfg_.qkv_dim(), H, qkv_.get(), k::GemvOut::kStore, l.attn_norm, eps,
-            stream_);
+    k::Gemv(x_.get(), l.wqkv, qkv_.get(), k::GemvOut::kStore, l.attn_norm, eps, stream_);
     k::RopeKvDecode(qkv_.get(), cfg_.num_heads, cfg_.num_kv_heads, cfg_.head_dim, w_.rope_inv_freq,
                     d_pos_.get(), opt_.max_seq, KCache(i), VCache(i), stream_);
     k::AttentionDecode(qkv_.get(), cfg_.num_heads, cfg_.num_kv_heads, cfg_.head_dim, KCache(i),
                        VCache(i), opt_.max_seq, d_pos_.get(), opt_.attention_splits, attn_ws_.get(),
                        attn_.get(), stream_);
     // x += Wo * attn
-    k::Gemv(attn_.get(), l.wo, H, cfg_.q_dim(), x_.get(), k::GemvOut::kAccumulate, nullptr, eps,
-            stream_);
+    k::Gemv(attn_.get(), l.wo, x_.get(), k::GemvOut::kAccumulate, nullptr, eps, stream_);
     // act = silu(Wgate * norm(x)) * (Wup * norm(x))
-    k::Gemv(x_.get(), l.w_gate_up, I, H, act_.get(), k::GemvOut::kSwiGlu, l.mlp_norm, eps, stream_);
+    k::Gemv(x_.get(), l.w_gate_up, act_.get(), k::GemvOut::kSwiGlu, l.mlp_norm, eps, stream_);
     // x += Wdown * act
-    k::Gemv(act_.get(), l.w_down, H, I, x_.get(), k::GemvOut::kAccumulate, nullptr, eps, stream_);
+    k::Gemv(act_.get(), l.w_down, x_.get(), k::GemvOut::kAccumulate, nullptr, eps, stream_);
   }
-  k::Gemv(x_.get(), w_.lm_head, cfg_.vocab_size, H, logits_.get(), k::GemvOut::kStore,
-          w_.final_norm, eps, stream_);
+  k::Gemv(x_.get(), w_.lm_head, logits_.get(), k::GemvOut::kStore, w_.final_norm, eps, stream_);
   k::AdvancePosition(d_pos_.get(), stream_);
 }
 
