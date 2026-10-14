@@ -18,8 +18,9 @@ def run_engine(model_dir: Path, tokens: list[int], *extra: str) -> subprocess.Co
 
 
 def engine_dump(model_dir: Path, tokens: list[int], num_layers: int, hidden: int, vocab: int,
-                *extra: str) -> tuple[list[np.ndarray], np.ndarray]:
-    """Hidden states (num_layers + 1 arrays of [T, H]) and logits [T, V] from --dump."""
+                *extra: str) -> tuple[list[np.ndarray], np.ndarray, np.ndarray]:
+    """From --dump: hidden states (num_layers + 1 arrays of [T, H]), prefill logits [T, V],
+    and the logits of the same sequence fed through the decode path one token at a time."""
     t = len(tokens)
     with tempfile.TemporaryDirectory() as d:
         run_engine(model_dir, tokens, "--dump", d, *extra)
@@ -28,7 +29,8 @@ def engine_dump(model_dir: Path, tokens: list[int], num_layers: int, hidden: int
             for i in range(num_layers + 1)
         ]
         logits = np.fromfile(Path(d) / "logits.f32", dtype=np.float32).reshape(t, vocab)
-    return states, logits
+        decode = np.fromfile(Path(d) / "decode_logits.f32", dtype=np.float32).reshape(t, vocab)
+    return states, logits, decode
 
 
 def engine_generate(model_dir: Path, tokens: list[int], n: int, *extra: str) -> list[int]:

@@ -158,7 +158,11 @@ class Llama:
         model_dir: str | Path,
         dtype: torch.dtype = torch.float32,
         device: str = "cpu",
+        kv_dtype: torch.dtype | None = None,
     ):
+        """kv_dtype rounds keys and values to that type after RoPE, the way a KV cache stored
+        in that type would. The engine keeps its cache in bf16, so comparisons against it use
+        kv_dtype=torch.bfloat16."""
         model_dir = Path(model_dir)
         self.cfg = Config.from_json(model_dir / "config.json")
         self.w = {k: v.to(device=device, dtype=dtype) for k, v in load_weights(model_dir).items()}
@@ -167,6 +171,7 @@ class Llama:
         self.inv_freq = rope_inv_freq(self.cfg).to(device)
         self.device = device
         self.dtype = dtype
+        self.kv_dtype = kv_dtype
 
     def layer(self, i: int, x: torch.Tensor, positions: torch.Tensor) -> torch.Tensor:
         cfg, w = self.cfg, self.w
@@ -180,6 +185,9 @@ class Llama:
         v = (h @ w[p + "self_attn.v_proj.weight"].T).view(t, cfg.num_kv_heads, cfg.head_dim)
         q = apply_rope(q, positions, self.inv_freq)
         k = apply_rope(k, positions, self.inv_freq)
+        if self.kv_dtype is not None:
+            k = k.to(self.kv_dtype).to(x.dtype)
+            v = v.to(self.kv_dtype).to(x.dtype)
         a = attention(q, k, v).reshape(t, cfg.num_heads * cfg.head_dim)
         x = x + a @ w[p + "self_attn.o_proj.weight"].T
 
