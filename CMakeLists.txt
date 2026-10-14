@@ -64,6 +64,8 @@ if(INFER_ENABLE_CUDA)
   add_executable(bench_engine bench/bench_engine.cpp)
   target_link_libraries(bench_engine PRIVATE infer_cuda infer_options)
 
+  add_executable(bench_kernels bench/bench_kernels.cu)
+  target_link_libraries(bench_kernels PRIVATE infer_cuda)
 endif()
 
 if(INFER_BUILD_TESTS)
