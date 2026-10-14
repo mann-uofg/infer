@@ -2,6 +2,7 @@
 
 #include <nvtx3/nvToolsExt.h>
 
+#include <random>
 #include <stdexcept>
 
 namespace infer {
@@ -40,7 +41,8 @@ Engine::Engine(const ModelConfig& cfg, const Weights& weights, const EngineOptio
       act_(Rows(options, static_cast<size_t>(cfg.intermediate_size))),
       logits_(static_cast<size_t>(options.max_logit_rows) * cfg.vocab_size),
       attn_ws_(k::AttentionDecodeWorkspace(cfg.num_heads, cfg.head_dim, options.attention_splits)),
-      argmax_best_(1) {
+      argmax_best_(1),
+      uniforms_(static_cast<size_t>(options.max_seq)) {
   if (opt_.max_seq < 1 || opt_.max_logit_rows < 1 || opt_.attention_splits < 1) {
     throw std::invalid_argument("bad engine options");
   }
@@ -49,7 +51,7 @@ Engine::Engine(const ModelConfig& cfg, const Weights& weights, const EngineOptio
 }
 
 Engine::~Engine() {
-  if (greedy_graph_ != nullptr) cudaGraphExecDestroy(greedy_graph_);
+  if (step_graph_ != nullptr) cudaGraphExecDestroy(step_graph_);
   if (stream_ != nullptr) cudaStreamDestroy(stream_);
 }
 
@@ -194,14 +196,20 @@ void Engine::EnqueueDecodeStep() {
   k::AdvancePosition(d_pos_.get(), stream_);
 }
 
-void Engine::EnqueueGreedyStep() {
-  if (opt_.backend == Backend::kOptimized) {
+void Engine::EnqueueGenerateStep(const Sampling& sampling) {
+  if (!sampling.greedy()) {
+    k::Sample(logits_.get(), cfg_.vocab_size, sampling.temperature, sampling.top_k, sampling.top_p,
+              uniforms_.get(), d_pos_.get(), token_.get(), history_.get(), stream_);
+  } else if (opt_.backend == Backend::kOptimized) {
     k::ArgmaxPartial(logits_.get(), cfg_.vocab_size, argmax_best_.get(), stream_);
     k::ArgmaxFinish(argmax_best_.get(), token_.get(), history_.get(), d_pos_.get(), stream_);
-    EnqueueDecodeStep();
   } else {
     k::Argmax(logits_.get(), cfg_.vocab_size, token_.get(), stream_);
     k::StoreToken(token_.get(), history_.get(), d_pos_.get(), stream_);
+  }
+  if (opt_.backend == Backend::kOptimized) {
+    EnqueueDecodeStep();
+  } else {
     EnqueueDecodeStepNaive();
   }
 }
@@ -254,12 +262,21 @@ std::vector<float> Engine::Logits(int rows) {
   return out;
 }
 
-std::vector<int> Engine::DecodeGreedy(int n) {
-  if (n <= 0) return {};
-  if (logit_rows_ == 0) throw std::logic_error("DecodeGreedy needs a Prefill first");
-  if (pos_ + n > opt_.max_seq) throw std::invalid_argument("sequence longer than max_seq");
+std::vector<int> Engine::DecodeGreedy(int n) { return DecodeLoop(n, Sampling{}); }
 
-  // The greedy step reads logits row 0; after an all-rows prefill the last row is elsewhere.
+std::vector<int> Engine::DecodeSampled(int n, const Sampling& sampling) {
+  return DecodeLoop(n, sampling);
+}
+
+std::vector<int> Engine::DecodeLoop(int n, const Sampling& sampling) {
+  if (n <= 0) return {};
+  if (logit_rows_ == 0) throw std::logic_error("decoding needs a Prefill first");
+  if (pos_ + n > opt_.max_seq) throw std::invalid_argument("sequence longer than max_seq");
+  if (!sampling.greedy() && !(sampling.top_p > 0.0f && sampling.top_p <= 1.0f)) {
+    throw std::invalid_argument("top_p must be in (0, 1]");
+  }
+
+  // The step reads logits row 0; after an all-rows prefill the last row is elsewhere.
   if (logit_rows_ > 1) {
     CUDA_CHECK(cudaMemcpyAsync(
         logits_.get(), logits_.get() + static_cast<size_t>(logit_rows_ - 1) * cfg_.vocab_size,
@@ -267,25 +284,40 @@ std::vector<int> Engine::DecodeGreedy(int n) {
     logit_rows_ = 1;
   }
 
+  if (!sampling.greedy()) {
+    // One uniform number per position, from the seed: the same seed and prompt give the same
+    // text, and the step stays a fixed graph because it indexes this buffer by position.
+    std::mt19937_64 rng(sampling.seed);
+    std::uniform_real_distribution<float> unif(0.0f, 1.0f);
+    std::vector<float> u(static_cast<size_t>(opt_.max_seq));
+    for (float& x : u) x = unif(rng);
+    CUDA_CHECK(cudaMemcpyAsync(uniforms_.get(), u.data(), u.size() * sizeof(float),
+                               cudaMemcpyHostToDevice, stream_));
+    CUDA_CHECK(cudaStreamSynchronize(stream_));  // u is a local
+  }
+
   const bool graph = opt_.backend == Backend::kOptimized && opt_.cuda_graph;
-  if (graph && greedy_graph_ == nullptr) {
-    // Capture one greedy step. Every pointer it touches is fixed for the engine's lifetime and
-    // the position lives in device memory, so the same graph is valid at every step.
+  if (graph && (step_graph_ == nullptr || !(step_graph_sampling_ == sampling))) {
+    // Capture one step. Every pointer it touches is fixed for the engine's lifetime and the
+    // position lives in device memory, so the same graph is valid at every step. The sampling
+    // parameters are baked in, so a different setting needs a new capture.
+    if (step_graph_ != nullptr) CUDA_CHECK(cudaGraphExecDestroy(step_graph_));
     cudaGraph_t g;
     CUDA_CHECK(cudaStreamBeginCapture(stream_, cudaStreamCaptureModeThreadLocal));
-    EnqueueGreedyStep();
+    EnqueueGenerateStep(sampling);
     CUDA_CHECK(cudaStreamEndCapture(stream_, &g));
-    CUDA_CHECK(cudaGraphInstantiate(&greedy_graph_, g, 0));
+    CUDA_CHECK(cudaGraphInstantiate(&step_graph_, g, 0));
     CUDA_CHECK(cudaGraphDestroy(g));
+    step_graph_sampling_ = sampling;
   }
 
   const int start = pos_;
   for (int i = 0; i < n; ++i) {
     NvtxRange range("decode");
     if (graph) {
-      CUDA_CHECK(cudaGraphLaunch(greedy_graph_, stream_));
+      CUDA_CHECK(cudaGraphLaunch(step_graph_, stream_));
     } else {
-      EnqueueGreedyStep();
+      EnqueueGenerateStep(sampling);
     }
     pos_ += 1;
   }
@@ -294,6 +326,12 @@ std::vector<int> Engine::DecodeGreedy(int n) {
                              cudaMemcpyDeviceToHost, stream_));
   CUDA_CHECK(cudaStreamSynchronize(stream_));
   return out;
+}
+
+std::vector<int> Engine::Generate(const std::vector<int>& prompt, int n, const Sampling& sampling) {
+  Reset();
+  Prefill(prompt);
+  return DecodeLoop(n, sampling);
 }
 
 std::vector<int> Engine::GenerateGreedy(const std::vector<int>& prompt, int n) {

@@ -2,6 +2,7 @@
 // (scripts/generate.py).
 //
 //   infer --model DIR --tokens 128000,791,6864 --generate 32
+//   infer --model DIR --tokens ... --generate 32 --temperature 0.6 --top-p 0.9 --seed 1
 //   infer --model DIR --tokens ... --dump OUTDIR     # hidden states + logits for comparison
 
 #include <chrono>
@@ -28,6 +29,7 @@ struct Args {
   int max_tokens = 0;
   std::string backend = "optimized";
   bool graph = true;
+  infer::Sampling sampling;
 };
 
 [[noreturn]] void Usage() {
@@ -65,6 +67,14 @@ Args ParseArgs(int argc, char** argv) {
       a.backend = value;
     } else if (flag == "--graph") {
       a.graph = value != "off";
+    } else if (flag == "--temperature") {
+      a.sampling.temperature = std::stof(value);
+    } else if (flag == "--top-k") {
+      a.sampling.top_k = std::stoi(value);
+    } else if (flag == "--top-p") {
+      a.sampling.top_p = std::stof(value);
+    } else if (flag == "--seed") {
+      a.sampling.seed = std::stoull(value);
     } else if (flag == "--max-tokens") {
       a.max_tokens = std::stoi(value);
     } else {
@@ -137,7 +147,7 @@ int main(int argc, char** argv) {
 
     if (args.generate > 0) {
       const auto g0 = std::chrono::steady_clock::now();
-      const std::vector<int> out = engine.GenerateGreedy(args.tokens, args.generate);
+      const std::vector<int> out = engine.Generate(args.tokens, args.generate, args.sampling);
       const auto g1 = std::chrono::steady_clock::now();
       for (size_t i = 0; i < out.size(); ++i) std::printf(i == 0 ? "%d" : " %d", out[i]);
       std::printf("\n");

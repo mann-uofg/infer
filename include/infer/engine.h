@@ -6,6 +6,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -33,6 +34,17 @@ struct EngineOptions {
   Backend backend = Backend::kOptimized;
   bool cuda_graph = true;     // optimized backend: replay greedy decode steps as a graph
   int attention_splits = 16;  // optimized backend: KV ranges per head in decode attention
+};
+
+// How the next token is chosen. temperature <= 0 means greedy (argmax).
+struct Sampling {
+  float temperature = 0.0f;
+  int top_k = 0;       // keep the k most likely tokens (0: all)
+  float top_p = 1.0f;  // then the smallest set reaching this probability (1: all)
+  uint64_t seed = 0;   // random numbers are drawn per position from this seed
+
+  bool greedy() const { return !(temperature > 0.0f); }
+  bool operator==(const Sampling&) const = default;
 };
 
 class Engine {
@@ -67,8 +79,12 @@ class Engine {
   // on the GPU between steps, so the host only waits once, at the end.
   std::vector<int> DecodeGreedy(int n);
 
-  // Reset, prefill the prompt, then DecodeGreedy(n).
+  // Like DecodeGreedy, choosing each token with `sampling` instead of argmax.
+  std::vector<int> DecodeSampled(int n, const Sampling& sampling);
+
+  // Reset, prefill the prompt, then DecodeGreedy(n) / DecodeSampled(n, sampling).
   std::vector<int> GenerateGreedy(const std::vector<int>& prompt, int n);
+  std::vector<int> Generate(const std::vector<int>& prompt, int n, const Sampling& sampling);
 
   cudaStream_t stream() const { return stream_; }
 
@@ -78,8 +94,10 @@ class Engine {
   // One decode step. Token in token_, position in d_pos_; logits go to row 0; d_pos_ advances.
   void EnqueueDecodeStep();
   void EnqueueDecodeStepNaive();
-  // Argmax of logits row 0 into token_, record it in history_, then the decode step.
-  void EnqueueGreedyStep();
+  // Choose the next token from logits row 0 into token_ (argmax or sampling), record it in
+  // history_, then run the decode step.
+  void EnqueueGenerateStep(const Sampling& sampling);
+  std::vector<int> DecodeLoop(int n, const Sampling& sampling);
   void CheckTokens(const std::vector<int>& tokens) const;
   bf16* KCache(int layer) const;
   bf16* VCache(int layer) const;
@@ -88,7 +106,8 @@ class Engine {
   const Weights& w_;
   EngineOptions opt_;
   cudaStream_t stream_ = nullptr;
-  cudaGraphExec_t greedy_graph_ = nullptr;
+  cudaGraphExec_t step_graph_ = nullptr;  // EnqueueGenerateStep(step_graph_sampling_)
+  Sampling step_graph_sampling_;
   int pos_ = 0;
   int logit_rows_ = 0;  // rows written by the last Prefill/Decode
 
@@ -108,6 +127,7 @@ class Engine {
   DeviceBuffer<float> logits_;   // [max_logit_rows, V]
   DeviceBuffer<float> attn_ws_;  // split-KV partial results
   DeviceBuffer<unsigned long long> argmax_best_;  // packed (value, index) for ArgmaxPartial
+  DeviceBuffer<float> uniforms_;  // [max_seq] random numbers for sampling, one per position
 };
 
 }  // namespace infer
