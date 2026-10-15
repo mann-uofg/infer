@@ -82,5 +82,30 @@ TEST(ConfigTest, RejectsUnsupportedModels) {
   EXPECT_THROW(ModelConfig::FromJsonText(with("\"llama3\"", "\"yarn\"")), std::runtime_error);
 }
 
+TEST(ConfigTest, RejectsHostileNumbers) {
+  auto with = [](const std::string& from, const std::string& to) {
+    std::string t = kLlama32;
+    t.replace(t.find(from), from.size(), to);
+    return t;
+  };
+  // 2^32 + 2048 would wrap to 2048 if narrowed to int without a check.
+  EXPECT_THROW(
+      ModelConfig::FromJsonText(with("\"hidden_size\": 2048", "\"hidden_size\": 4294969344")),
+      std::runtime_error);
+  EXPECT_THROW(ModelConfig::FromJsonText(with("\"vocab_size\": 128256", "\"vocab_size\": -1")),
+               std::runtime_error);
+  // heads x head_dim: 4096 x 1024 = 4M columns for q alone, beyond any sane width.
+  std::string wide = with("\"num_attention_heads\": 32", "\"num_attention_heads\": 4096");
+  wide.replace(wide.find("\"head_dim\": 64"), 14, "\"head_dim\": 1024");
+  EXPECT_THROW(ModelConfig::FromJsonText(wide), std::runtime_error);
+  EXPECT_THROW(ModelConfig::FromJsonText(with("\"rms_norm_eps\": 1e-05", "\"rms_norm_eps\": 0")),
+               std::runtime_error);
+  EXPECT_THROW(ModelConfig::FromJsonText(with("\"factor\": 32.0", "\"factor\": 0")),
+               std::runtime_error);
+  EXPECT_THROW(
+      ModelConfig::FromJsonText(with("\"high_freq_factor\": 4.0", "\"high_freq_factor\": 1.0")),
+      std::runtime_error);
+}
+
 }  // namespace
 }  // namespace infer

@@ -1,6 +1,7 @@
 #include "infer/config.h"
 
 #include <cmath>
+#include <cstdint>
 #include <fstream>
 #include <sstream>
 #include <stdexcept>
@@ -11,11 +12,33 @@ namespace infer {
 
 namespace {
 
-int GetInt(const Json& j, const std::string& key) { return static_cast<int>(j[key].AsInt()); }
+// config.json is input like any other file: every integer is range-checked before it is
+// narrowed to int, so a hostile value can't wrap around or overflow the products below.
+int GetInt(const Json& j, const std::string& key, int64_t lo, int64_t hi) {
+  const int64_t v = j[key].AsInt();
+  if (v < lo || v > hi) {
+    throw std::runtime_error(key + " = " + std::to_string(v) + " is out of range [" +
+                             std::to_string(lo) + ", " + std::to_string(hi) + "]");
+  }
+  return static_cast<int>(v);
+}
+
+double GetPositive(const Json& j, const std::string& key) {
+  const double v = j[key].AsNumber();
+  if (!(v > 0.0) || !std::isfinite(v)) throw std::runtime_error(key + " must be positive");
+  return v;
+}
+
+constexpr int64_t kMaxDim = 1 << 20;  // any single width
+constexpr int64_t kMaxVocab = 1 << 22;
+constexpr int64_t kMaxLayers = 1024;
+constexpr int64_t kMaxHeads = 4096;
+constexpr int64_t kMaxHeadDim = 1024;
+constexpr int64_t kMaxTokenId = (int64_t{1} << 31) - 1;
 
 // Same arithmetic as the reference (reference/llama.py: rope_inv_freq).
 std::vector<float> ComputeRopeInvFreq(const Json& j, int head_dim) {
-  const double theta = j.Has("rope_theta") ? j["rope_theta"].AsNumber() : 10000.0;
+  const double theta = j.Has("rope_theta") ? GetPositive(j, "rope_theta") : 10000.0;
   std::vector<float> inv_freq;
   for (int i = 0; i < head_dim; i += 2) {
     inv_freq.push_back(
@@ -29,10 +52,12 @@ std::vector<float> ComputeRopeInvFreq(const Json& j, int head_dim) {
   if (type.empty() || type == "default") return inv_freq;
   if (type != "llama3") throw std::runtime_error("unsupported rope scaling type " + type);
 
-  const double factor = s["factor"].AsNumber();
-  const double low = s["low_freq_factor"].AsNumber();
-  const double high = s["high_freq_factor"].AsNumber();
-  const double old_ctx = s["original_max_position_embeddings"].AsNumber();
+  const double factor = GetPositive(s, "factor");
+  const double low = GetPositive(s, "low_freq_factor");
+  const double high = GetPositive(s, "high_freq_factor");
+  const double old_ctx = GetPositive(s, "original_max_position_embeddings");
+  if (!(high > low))
+    throw std::runtime_error("rope_scaling: high_freq_factor must exceed low_freq_factor");
   const double low_freq_wavelen = old_ctx / low;
   const double high_freq_wavelen = old_ctx / high;
   const double kPi = 3.14159265358979323846;
@@ -68,30 +93,39 @@ ModelConfig ModelConfig::FromJsonText(const std::string& text) {
   }
 
   ModelConfig c;
-  c.vocab_size = GetInt(j, "vocab_size");
-  c.hidden_size = GetInt(j, "hidden_size");
-  c.intermediate_size = GetInt(j, "intermediate_size");
-  c.num_layers = GetInt(j, "num_hidden_layers");
-  c.num_heads = GetInt(j, "num_attention_heads");
-  c.num_kv_heads = j.Has("num_key_value_heads") ? GetInt(j, "num_key_value_heads") : c.num_heads;
-  c.head_dim = j.Has("head_dim") && !j["head_dim"].is_null() ? GetInt(j, "head_dim")
+  c.vocab_size = GetInt(j, "vocab_size", 1, kMaxVocab);
+  c.hidden_size = GetInt(j, "hidden_size", 1, kMaxDim);
+  c.intermediate_size = GetInt(j, "intermediate_size", 1, kMaxDim);
+  c.num_layers = GetInt(j, "num_hidden_layers", 1, kMaxLayers);
+  c.num_heads = GetInt(j, "num_attention_heads", 1, kMaxHeads);
+  c.num_kv_heads =
+      j.Has("num_key_value_heads") ? GetInt(j, "num_key_value_heads", 1, kMaxHeads) : c.num_heads;
+  c.head_dim = j.Has("head_dim") && !j["head_dim"].is_null() ? GetInt(j, "head_dim", 2, kMaxHeadDim)
                                                              : c.hidden_size / c.num_heads;
-  c.rms_norm_eps = static_cast<float>(j["rms_norm_eps"].AsNumber());
+  c.rms_norm_eps = static_cast<float>(GetPositive(j, "rms_norm_eps"));
   c.tie_word_embeddings = j.Has("tie_word_embeddings") && j["tie_word_embeddings"].AsBool();
   if (j.Has("bos_token_id") && j["bos_token_id"].is_number()) {
-    c.bos_token_id = GetInt(j, "bos_token_id");
+    c.bos_token_id = GetInt(j, "bos_token_id", 0, kMaxTokenId);
   }
   // Some checkpoints list several end-of-sequence ids; the first is the primary one.
   if (j.Has("eos_token_id") && j["eos_token_id"].is_number()) {
-    c.eos_token_id = GetInt(j, "eos_token_id");
+    c.eos_token_id = GetInt(j, "eos_token_id", 0, kMaxTokenId);
   } else if (j.Has("eos_token_id") && j["eos_token_id"].is_array() &&
              !j["eos_token_id"].AsArray().empty()) {
-    c.eos_token_id = static_cast<int>(j["eos_token_id"].AsArray()[0].AsInt());
+    const int64_t eos = j["eos_token_id"].AsArray()[0].AsInt();
+    if (eos < 0 || eos > kMaxTokenId) throw std::runtime_error("eos_token_id out of range");
+    c.eos_token_id = static_cast<int>(eos);
   }
 
   if (c.vocab_size <= 0 || c.hidden_size <= 0 || c.intermediate_size <= 0 || c.num_layers <= 0 ||
       c.num_heads <= 0 || c.num_kv_heads <= 0 || c.head_dim <= 0) {
     throw std::runtime_error("config has a non-positive dimension");
+  }
+  // The widths the engine multiplies together must fit in an int.
+  const int64_t q_dim = int64_t{c.num_heads} * c.head_dim;
+  const int64_t qkv_dim = q_dim + 2 * int64_t{c.num_kv_heads} * c.head_dim;
+  if (qkv_dim > kMaxDim) {
+    throw std::runtime_error("config: attention width out of range");
   }
   if (c.num_heads % c.num_kv_heads != 0) {
     throw std::runtime_error("num_attention_heads must be a multiple of num_key_value_heads");
