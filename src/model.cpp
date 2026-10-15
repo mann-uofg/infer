@@ -63,26 +63,27 @@ size_t DataBytes(WeightFormat f, int rows, int cols) {
   return 0;
 }
 
-size_t ScaleBytes(WeightFormat f, int rows, int cols) {
+size_t ScaleBytes(WeightFormat f, int rows, int cols, int group) {
   switch (f) {
     case WeightFormat::kBf16:
       return 0;
     case WeightFormat::kInt8:
       return static_cast<size_t>(rows) * sizeof(float);
     case WeightFormat::kInt4:
-      return static_cast<size_t>(rows) * (cols / kernels::kInt4Group) * sizeof(__half);
+      return static_cast<size_t>(rows) * (cols / group) * sizeof(__half);
   }
   return 0;
 }
 
-size_t ArenaBytes(WeightFormat f, const Source& s) {
-  return AlignUp(DataBytes(f, s.rows, s.cols)) + AlignUp(ScaleBytes(f, s.rows, s.cols));
+size_t ArenaBytes(WeightFormat f, const Source& s, int group) {
+  return AlignUp(DataBytes(f, s.rows, s.cols)) + AlignUp(ScaleBytes(f, s.rows, s.cols, group));
 }
 
 // Hands out aligned slices of the arena and fills them.
 class Uploader {
  public:
-  Uploader(std::byte* base, bf16* scratch) : base_(base), scratch_(scratch) {}
+  Uploader(std::byte* base, bf16* scratch, int group)
+      : base_(base), scratch_(scratch), group_(group) {}
 
   std::byte* Take(size_t bytes) {
     std::byte* p = base_ + offset_;
@@ -110,6 +111,7 @@ class Uploader {
     l.format = format;
     l.rows = s.rows;
     l.cols = s.cols;
+    l.group = group_;
     if (format == WeightFormat::kBf16) {
       l.data = PutBf16(s.parts);
       return l;
@@ -121,12 +123,12 @@ class Uploader {
       n += t->nbytes;
     }
     std::byte* data = Take(DataBytes(format, s.rows, s.cols));
-    std::byte* scales = Take(ScaleBytes(format, s.rows, s.cols));
+    std::byte* scales = Take(ScaleBytes(format, s.rows, s.cols, group_));
     if (format == WeightFormat::kInt8) {
       kernels::QuantizeInt8(scratch_, s.rows, s.cols, reinterpret_cast<int8_t*>(data),
                             reinterpret_cast<float*>(scales), nullptr);
     } else {
-      kernels::QuantizeInt4(scratch_, s.rows, s.cols, reinterpret_cast<uint8_t*>(data),
+      kernels::QuantizeInt4(scratch_, s.rows, s.cols, group_, reinterpret_cast<uint8_t*>(data),
                             reinterpret_cast<__half*>(scales), nullptr);
     }
     CUDA_CHECK(cudaDeviceSynchronize());  // the scratch buffer is reused by the next call
@@ -138,11 +140,12 @@ class Uploader {
  private:
   std::byte* base_;
   bf16* scratch_;
+  int group_;
   size_t offset_ = 0;
 };
 
 size_t LinearBytes(const Linear& l) {
-  return DataBytes(l.format, l.rows, l.cols) + ScaleBytes(l.format, l.rows, l.cols);
+  return DataBytes(l.format, l.rows, l.cols) + ScaleBytes(l.format, l.rows, l.cols, l.group);
 }
 
 }  // namespace
@@ -172,7 +175,8 @@ Weights Weights::Load(const std::string& dir, const ModelConfig& cfg, const Load
   };
   std::vector<LayerSources> ls;
   size_t total = AlignUp(embed->nbytes) + AlignUp(final_norm->nbytes);
-  if (!head_is_embed) total += ArenaBytes(head_fmt, head);
+  const int group = options.int4_group;
+  if (!head_is_embed) total += ArenaBytes(head_fmt, head, group);
   size_t scratch = head_fmt == WeightFormat::kBf16 ? 0 : lm_head_src->nbytes;
   for (int i = 0; i < cfg.num_layers; ++i) {
     const std::string p = "model.layers." + std::to_string(i) + ".";
@@ -188,7 +192,7 @@ Weights Weights::Load(const std::string& dir, const ModelConfig& cfg, const Load
     l.down = Stack({Expect(st, p + "mlp.down_proj.weight", {H, I})});
     total += AlignUp(l.attn_norm->nbytes) + AlignUp(l.mlp_norm->nbytes);
     for (const Source* s : {&l.qkv, &l.o, &l.gate_up, &l.down}) {
-      total += ArenaBytes(fmt, *s);
+      total += ArenaBytes(fmt, *s, group);
       if (fmt != WeightFormat::kBf16) {
         scratch = std::max(scratch, static_cast<size_t>(s->rows) * s->cols * sizeof(bf16));
       }
@@ -200,7 +204,7 @@ Weights Weights::Load(const std::string& dir, const ModelConfig& cfg, const Load
   w.options = options;
   w.arena_ = DeviceBuffer<std::byte>(total);
   DeviceBuffer<bf16> scratch_buf(scratch / sizeof(bf16));
-  Uploader up(w.arena_.get(), scratch_buf.get());
+  Uploader up(w.arena_.get(), scratch_buf.get(), group);
   w.embed = up.PutBf16({embed});
   w.final_norm = up.PutBf16({final_norm});
   if (head_is_embed) {

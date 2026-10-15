@@ -163,6 +163,7 @@ class Llama:
         kv_dtype: torch.dtype | None = None,
         weights: str = "bf16",
         lm_head: str | None = None,
+        int4_group: int = 32,
     ):
         """kv_dtype rounds keys and values to that type after RoPE, the way a KV cache stored
         in that type would. The engine keeps its cache in bf16, so comparisons against it use
@@ -170,7 +171,8 @@ class Llama:
 
         weights="int8" or "int4" replaces every projection by its quantized-then-dequantized
         version, using the engine's rule (reference/quant.py); lm_head does the same for the
-        LM head (default: the same format as weights). The embedding lookup stays bf16."""
+        LM head (default: the same format as weights). The embedding lookup stays bf16.
+        int4_group is the number of weights per int4 scale."""
         model_dir = Path(model_dir)
         self.cfg = Config.from_json(model_dir / "config.json")
         raw = load_weights(model_dir)
@@ -180,7 +182,9 @@ class Llama:
         for name in list(raw):
             fmt = weights if name.endswith("_proj.weight") else head if name == "lm_head.weight" else None
             if fmt is not None and fmt != "bf16":
-                raw[name] = QUANTIZERS[fmt](raw[name].to(device))
+                w = raw[name].to(device)
+                raw[name] = (QUANTIZERS[fmt](w, int4_group) if fmt == "int4"
+                             else QUANTIZERS[fmt](w))
         self.w = {k: v.to(device=device, dtype=dtype) for k, v in raw.items()}
         self.inv_freq = rope_inv_freq(self.cfg).to(device)
         self.device = device

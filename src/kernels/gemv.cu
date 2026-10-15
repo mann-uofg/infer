@@ -132,15 +132,17 @@ struct Int4Format {
   struct Row {
     const uint8_t* w;
     const __half* scales;
+    int group_shift;  // log2(group)
   };
   __device__ static Row MakeRow(const Linear& L, int row) {
-    return {
-        static_cast<const uint8_t*>(L.data) + static_cast<size_t>(row) * (L.cols / 2),
-        static_cast<const __half*>(L.scales) + static_cast<size_t>(row) * (L.cols / kInt4Group)};
+    return {static_cast<const uint8_t*>(L.data) + static_cast<size_t>(row) * (L.cols / 2),
+            static_cast<const __half*>(L.scales) + static_cast<size_t>(row) * (L.cols / L.group),
+            __ffs(L.group) - 1};
   }
   __device__ static uint4 Load(const Row& r, int k) { return LoadStreaming(r.w + k / 2); }
-  // A lane's 32 weights never straddle a group (32 divides 128 and k is a multiple of 32),
-  // so one scale applies to the whole partial sum.
+  // A lane's 32 weights never straddle a group (the group is a multiple of 32 and k is a
+  // multiple of 32), so one scale applies to the whole partial sum. With groups of 32 each
+  // 16-byte load is exactly one group.
   __device__ static float Dot(const Row& r, const uint4& w, int k, const float* x) {
     const unsigned int words[4] = {w.x, w.y, w.z, w.w};
     constexpr float kBias = 8388608.0f + 8.0f;  // stored nibbles are q + 8
@@ -162,7 +164,7 @@ struct Int4Format {
       s = fmaf(ByteToFloat(lo, 0x7543u, kBias), xb.z, s);
       s = fmaf(ByteToFloat(hi, 0x7543u, kBias), xb.w, s);
     }
-    return s * __half2float(r.scales[k / kInt4Group]);
+    return s * __half2float(r.scales[k >> r.group_shift]);
   }
   __device__ static float Finish(const Row&, float acc) { return acc; }
 };

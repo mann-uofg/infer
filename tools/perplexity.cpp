@@ -42,7 +42,8 @@ struct Args {
 [[noreturn]] void Usage() {
   std::fprintf(stderr,
                "usage: perplexity --model DIR --tokens FILE [--ctx 512] [--chunks N] [--bos ID]\n"
-               "                  [--weights bf16|int8|int4] [--lm-head bf16|int8|int4]\n"
+               "                  [--weights bf16|int8|int4] [--lm-head bf16|int8|int4] "
+               "[--int4-group 32|64|128]\n"
                "                  [--backend naive|optimized]\n");
   std::exit(2);
 }
@@ -67,6 +68,8 @@ Args ParseArgs(int argc, char** argv) {
       a.load.format = infer::ParseWeightFormat(v);
     } else if (f == "--lm-head") {
       a.load.lm_head_format = infer::ParseWeightFormat(v);
+    } else if (f == "--int4-group") {
+      a.load.int4_group = std::stoi(v);
     } else if (f == "--backend") {
       a.backend = v;
     } else {

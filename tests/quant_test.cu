@@ -55,11 +55,10 @@ struct CpuInt4 {
   std::vector<float> dequant;
 };
 
-CpuInt4 QuantizeInt4Cpu(const std::vector<float>& w, int rows, int cols) {
+CpuInt4 QuantizeInt4Cpu(const std::vector<float>& w, int rows, int cols, int G) {
   CpuInt4 r;
   r.packed.resize(w.size() / 2);
   r.dequant.resize(w.size());
-  const int G = kernels::kInt4Group;
   for (int i = 0; i < rows; ++i) {
     for (int g = 0; g < cols / G; ++g) {
       const size_t base = static_cast<size_t>(i) * cols + static_cast<size_t>(g) * G;
@@ -113,14 +112,16 @@ TEST(QuantTest, Int4MatchesCpuBitForBit) {
   const int rows = 37, cols = 512;
   const auto w = TestWeights(rows, cols, 81);
   auto d_w = Upload(ToBf16(w));
-  DeviceBuffer<uint8_t> q(w.size() / 2);
-  DeviceBuffer<__half> scales(static_cast<size_t>(rows) * cols / kernels::kInt4Group);
-  kernels::QuantizeInt4(d_w.get(), rows, cols, q.get(), scales.get(), nullptr);
-  const CpuInt4 cpu = QuantizeInt4Cpu(w, rows, cols);
-  EXPECT_EQ(Download(q), cpu.packed);
-  const auto gs = Download(scales);
-  for (size_t i = 0; i < gs.size(); ++i) {
-    ASSERT_EQ(__half_as_ushort(gs[i]), __half_as_ushort(cpu.scales[i])) << i;
+  for (int group : {32, 64, 128}) {
+    DeviceBuffer<uint8_t> q(w.size() / 2);
+    DeviceBuffer<__half> scales(static_cast<size_t>(rows) * cols / group);
+    kernels::QuantizeInt4(d_w.get(), rows, cols, group, q.get(), scales.get(), nullptr);
+    const CpuInt4 cpu = QuantizeInt4Cpu(w, rows, cols, group);
+    EXPECT_EQ(Download(q), cpu.packed) << "group " << group;
+    const auto gs = Download(scales);
+    for (size_t i = 0; i < gs.size(); ++i) {
+      ASSERT_EQ(__half_as_ushort(gs[i]), __half_as_ushort(cpu.scales[i])) << group << " " << i;
+    }
   }
 }
 
@@ -129,12 +130,12 @@ TEST(QuantTest, QuantizationErrorIsBounded) {
   const int rows = 64, cols = 1024;
   const auto w = TestWeights(rows, cols, 82);
   const CpuInt8 q8 = QuantizeInt8Cpu(w, rows, cols);
-  const CpuInt4 q4 = QuantizeInt4Cpu(w, rows, cols);
+  const CpuInt4 q4 = QuantizeInt4Cpu(w, rows, cols, 128);
   for (int i = 0; i < rows; ++i) {
     for (int k = 0; k < cols; ++k) {
       const size_t idx = static_cast<size_t>(i) * cols + k;
       EXPECT_LE(std::fabs(q8.dequant[idx] - w[idx]), q8.scales[static_cast<size_t>(i)] * 0.5001f);
-      const float s4 = __half2float(q4.scales[idx / kernels::kInt4Group]);
+      const float s4 = __half2float(q4.scales[idx / 128]);
       // The extreme value maps to -8, so the other side of the range only reaches +7: a value
       // more than 7.5 steps out on that side is clamped and loses up to a whole step. Everything
       // else is within half a step (plus a little for the fp16 rounding of the scale).
@@ -151,10 +152,10 @@ struct Quantized {
   DeviceBuffer<std::byte> scales;
 };
 
-Quantized Quantize(const std::vector<float>& w, int rows, int cols, WeightFormat f) {
+Quantized Quantize(const std::vector<float>& w, int rows, int cols, WeightFormat f, int group) {
   Quantized r;
   auto d_w = Upload(ToBf16(w));
-  r.linear = Linear{f, nullptr, nullptr, rows, cols};
+  r.linear = Linear{f, nullptr, nullptr, rows, cols, group};
   if (f == WeightFormat::kInt8) {
     r.data = DeviceBuffer<std::byte>(w.size());
     r.scales = DeviceBuffer<std::byte>(rows * sizeof(float));
@@ -163,27 +164,27 @@ Quantized Quantize(const std::vector<float>& w, int rows, int cols, WeightFormat
     r.dequant = QuantizeInt8Cpu(w, rows, cols).dequant;
   } else {
     r.data = DeviceBuffer<std::byte>(w.size() / 2);
-    r.scales = DeviceBuffer<std::byte>(w.size() / kernels::kInt4Group * sizeof(__half));
-    kernels::QuantizeInt4(d_w.get(), rows, cols, reinterpret_cast<uint8_t*>(r.data.get()),
+    r.scales = DeviceBuffer<std::byte>(w.size() / group * sizeof(__half));
+    kernels::QuantizeInt4(d_w.get(), rows, cols, group, reinterpret_cast<uint8_t*>(r.data.get()),
                           reinterpret_cast<__half*>(r.scales.get()), nullptr);
-    r.dequant = QuantizeInt4Cpu(w, rows, cols).dequant;
+    r.dequant = QuantizeInt4Cpu(w, rows, cols, group).dequant;
   }
   r.linear.data = r.data.get();
   r.linear.scales = r.scales.get();
   return r;
 }
 
-class QuantGemvTest : public ::testing::TestWithParam<std::tuple<WeightFormat, int, int>> {};
+class QuantGemvTest : public ::testing::TestWithParam<std::tuple<WeightFormat, int, int, int>> {};
 
 TEST_P(QuantGemvTest, MatchesDequantizedReference) {
-  const auto [fmt, N, K] = GetParam();
+  const auto [fmt, group, N, K] = GetParam();
   const auto x = RandomFloats(K, 1.0f, 83);
   const auto nw = RoundTripBf16(RandomFloats(K, 1.0f, 84));
   auto d_x = Upload(x);
   auto d_nw = Upload(ToBf16(nw));
   const auto normed = test::CpuRmsNorm(x, nw, 1, K, 1e-5f);
 
-  const Quantized q = Quantize(TestWeights(N, K, 85), N, K, fmt);
+  const Quantized q = Quantize(TestWeights(N, K, 85), N, K, fmt, group);
   DeviceBuffer<float> d_y(N);
   kernels::Gemv(d_x.get(), q.linear, d_y.get(), kernels::GemvOut::kStore, d_nw.get(), 1e-5f,
                 nullptr);
@@ -197,7 +198,7 @@ TEST_P(QuantGemvTest, MatchesDequantizedReference) {
   for (int i = 0; i < N; ++i) want[i] += y0[i];
   ExpectClose(Download(d_y), want, 1e-4f, 1e-4f);
 
-  const Quantized gu = Quantize(TestWeights(2 * N, K, 87), 2 * N, K, fmt);
+  const Quantized gu = Quantize(TestWeights(2 * N, K, 87), 2 * N, K, fmt, group);
   kernels::Gemv(d_x.get(), gu.linear, d_y.get(), kernels::GemvOut::kSwiGlu, d_nw.get(), 1e-5f,
                 nullptr);
   ExpectClose(Download(d_y),
@@ -206,31 +207,38 @@ TEST_P(QuantGemvTest, MatchesDequantizedReference) {
 }
 
 TEST_P(QuantGemvTest, GemmMatchesDequantizedReference) {
-  const auto [fmt, N, K] = GetParam();
+  const auto [fmt, group, N, K] = GetParam();
   for (int T : {3, 300}) {
     const auto x = RandomFloats(static_cast<size_t>(T) * K, 1.0f, 88);
     auto d_x = Upload(x);
-    const Quantized q = Quantize(TestWeights(N, K, 89), N, K, fmt);
+    const Quantized q = Quantize(TestWeights(N, K, 89), N, K, fmt, group);
     DeviceBuffer<float> d_y(static_cast<size_t>(T) * N);
     kernels::Gemm(d_x.get(), q.linear, T, d_y.get(), false, nullptr);
     ExpectClose(Download(d_y), test::CpuMatmul(x, q.dequant, T, N, K), 1e-4f, 1e-4f);
   }
 }
 
+// (format, int4 group, N, K): decode shapes, the tiny model's MLP (K = 1408 = 11 x 128) and an
+// odd N; int4 with groups of 128 and 32.
 INSTANTIATE_TEST_SUITE_P(
     Shapes, QuantGemvTest,
-    ::testing::Values(std::make_tuple(WeightFormat::kInt8, 3072, 2048),
-                      std::make_tuple(WeightFormat::kInt8, 2048, 8192),
-                      std::make_tuple(WeightFormat::kInt8, 33, 1408),
-                      std::make_tuple(WeightFormat::kInt4, 3072, 2048),
-                      std::make_tuple(WeightFormat::kInt4, 2048, 8192),
-                      std::make_tuple(WeightFormat::kInt4, 33, 1408)),
-    [](const ::testing::TestParamInfo<std::tuple<WeightFormat, int, int>>& info) {
+    ::testing::Values(std::make_tuple(WeightFormat::kInt8, 128, 3072, 2048),
+                      std::make_tuple(WeightFormat::kInt8, 128, 2048, 8192),
+                      std::make_tuple(WeightFormat::kInt8, 128, 33, 1408),
+                      std::make_tuple(WeightFormat::kInt4, 128, 3072, 2048),
+                      std::make_tuple(WeightFormat::kInt4, 128, 2048, 8192),
+                      std::make_tuple(WeightFormat::kInt4, 128, 33, 1408),
+                      std::make_tuple(WeightFormat::kInt4, 32, 3072, 2048),
+                      std::make_tuple(WeightFormat::kInt4, 32, 2048, 8192),
+                      std::make_tuple(WeightFormat::kInt4, 32, 33, 1408)),
+    [](const ::testing::TestParamInfo<std::tuple<WeightFormat, int, int, int>>& info) {
       // No structured binding here: its commas would split the macro arguments.
       const WeightFormat f = std::get<0>(info.param);
-      return std::string(f == WeightFormat::kInt8 ? "int8" : "int4") + "_" +
-             std::to_string(std::get<1>(info.param)) + "x" +
-             std::to_string(std::get<2>(info.param));
+      return std::string(f == WeightFormat::kInt8
+                             ? "int8"
+                             : "int4g" + std::to_string(std::get<1>(info.param))) +
+             "_" + std::to_string(std::get<2>(info.param)) + "x" +
+             std::to_string(std::get<3>(info.param));
     });
 
 }  // namespace

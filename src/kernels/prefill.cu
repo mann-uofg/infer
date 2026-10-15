@@ -92,7 +92,7 @@ struct Int4Load {
     const unsigned short two = *reinterpret_cast<const unsigned short*>(
         static_cast<const uint8_t*>(W.data) + static_cast<size_t>(n) * (W.cols / 2) + k / 2);
     const float s = __half2float(static_cast<const __half*>(
-        W.scales)[static_cast<size_t>(n) * (W.cols / kInt4Group) + k / kInt4Group]);
+        W.scales)[static_cast<size_t>(n) * (W.cols / W.group) + k / W.group]);
     return make_float4(static_cast<float>(static_cast<int>(two & 0xfu) - 8) * s,
                        static_cast<float>(static_cast<int>((two >> 4) & 0xfu) - 8) * s,
                        static_cast<float>(static_cast<int>((two >> 8) & 0xfu) - 8) * s,

@@ -54,6 +54,8 @@ struct LoadOptions {
   // sensitive to quantization. (llama.cpp's Q4_0 keeps it at 6 bits; int4 layers with an int8
   // head read almost exactly the same bytes per token.)
   std::optional<WeightFormat> lm_head_format;
+  // int4 only: weights per scale (32, 64 or 128).
+  int int4_group = kernels::kDefaultInt4Group;
 
   WeightFormat head() const { return lm_head_format.value_or(format); }
 };

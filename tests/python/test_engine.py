@@ -56,7 +56,9 @@ class References:
         if fmt != self.fmt:
             self.ref = None
             torch.cuda.empty_cache()
-            self.ref = Llama(self.d, device="cuda", kv_dtype=torch.bfloat16, weights=fmt)
+            weights, _, group = fmt.partition("-g")
+            self.ref = Llama(self.d, device="cuda", kv_dtype=torch.bfloat16, weights=weights,
+                             int4_group=int(group or 32))
             self.fmt = fmt
         return self.ref
 
@@ -77,6 +79,7 @@ BACKENDS = {
     "optimized-graph": ("bf16", ("--backend", "optimized", "--graph", "on")),
     "int8": ("int8", ("--backend", "optimized", "--weights", "int8")),
     "int4": ("int4", ("--backend", "optimized", "--weights", "int4")),
+    "int4-g128": ("int4-g128", ("--backend", "optimized", "--weights", "int4", "--int4-group", "128")),
 }
 
 

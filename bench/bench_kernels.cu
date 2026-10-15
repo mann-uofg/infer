@@ -177,8 +177,8 @@ void BenchGemv(Runner& r, const std::string& name, int N, int K, k::GemvOut out,
   for (k::WeightFormat f : {k::WeightFormat::kInt8, k::WeightFormat::kInt4}) {
     const size_t n = static_cast<size_t>(rows) * K;
     const size_t data = f == k::WeightFormat::kInt8 ? n : n / 2;
-    const size_t scales =
-        f == k::WeightFormat::kInt8 ? rows * sizeof(float) : n / k::kInt4Group * sizeof(__half);
+    const size_t scales = f == k::WeightFormat::kInt8 ? rows * sizeof(float)
+                                                      : n / k::kDefaultInt4Group * sizeof(__half);
     const int qcopies = CopiesFor(data + scales);
     std::vector<DeviceBuffer<std::byte>> qd;
     std::vector<DeviceBuffer<std::byte>> qs;
@@ -189,7 +189,8 @@ void BenchGemv(Runner& r, const std::string& name, int N, int K, k::GemvOut out,
         k::QuantizeInt8(W.get(c), rows, K, reinterpret_cast<int8_t*>(qd.back().get()),
                         reinterpret_cast<float*>(qs.back().get()), nullptr);
       } else {
-        k::QuantizeInt4(W.get(c), rows, K, reinterpret_cast<uint8_t*>(qd.back().get()),
+        k::QuantizeInt4(W.get(c), rows, K, k::kDefaultInt4Group,
+                        reinterpret_cast<uint8_t*>(qd.back().get()),
                         reinterpret_cast<__half*>(qs.back().get()), nullptr);
       }
     }

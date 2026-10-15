@@ -42,8 +42,10 @@ run_engine bf16-nograph --graph off
 run_engine bf16
 run_engine int8 --weights int8
 run_engine int4 --weights int4
-# Same bytes per token as llama.cpp's Q4_0 file (Q4_0 layers, Q6_K head).
+# Groups of 32 like Q4_0, and an int8 head for a Q6_K one: the same perplexity as llama.cpp's
+# Q4_0 file on Llama-3.2-1B, and about the same bytes per token.
 run_engine int4-int8head --weights int4 --lm-head int8
+run_engine int4-g128 --weights int4 --int4-group 128
 
 for q in bf16 Q8_0 Q4_0; do
   bench/llamacpp/bench.sh "$gguf/model-$q.gguf" "$prefix-llamacpp-$q" | tail -6

@@ -97,6 +97,8 @@ Args ParseArgs(int argc, char** argv) {
       a.load.format = infer::ParseWeightFormat(v);
     } else if (flag == "--lm-head") {
       a.load.lm_head_format = infer::ParseWeightFormat(v);
+    } else if (flag == "--int4-group") {
+      a.load.int4_group = std::stoi(v);
     } else if (flag == "--graph") {
       a.graph = v != "off";
     } else if (flag == "--temperature") {

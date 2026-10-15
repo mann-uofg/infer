@@ -4,12 +4,13 @@
 // [-127, 127]. One scale per row is enough because each row of a projection is one output
 // feature and its weights have one typical magnitude.
 //
-// int4, per group of 128 weights along a row: the value with the largest magnitude, m, maps to
-// -8 (scale = m / -8), and q = round(w / scale) clamped to [-8, 7], stored as q + 8 in a
-// nibble. That spends all 16 levels on the side of the range where the extreme value is, the
-// same trick as llama.cpp's Q4_0 (which uses groups of 32). Smaller groups follow the weights'
-// local magnitude more closely; 128 keeps the scales at 2 bytes per 128 weights (0.125 bits
-// per weight on top of the 4).
+// int4, per group of 32, 64 or 128 weights along a row: the value with the largest magnitude,
+// m, maps to -8 (scale = m / -8), and q = round(w / scale) clamped to [-8, 7], stored as q + 8
+// in a nibble. That spends all 16 levels on the side of the range where the extreme value is,
+// the same trick as llama.cpp's Q4_0. Smaller groups follow the weights' local magnitude more
+// closely at the cost of scale bytes: 2 bytes per group is 0.5 bits per weight at 32 (Q4_0's
+// 4.5 bits in total) and 0.125 at 128. On Llama-3.2-1B the group size matters a lot for
+// perplexity (see the README).
 //
 // Rounding is round-half-to-even (rintf), the same as torch.round, so the Python reference can
 // reproduce the quantized weights bit for bit.
@@ -56,48 +57,27 @@ __global__ void QuantizeInt8Kernel(const bf16* __restrict__ w, int cols, int8_t*
   }
 }
 
-// One warp per group of 128 weights: each lane handles 4 of them (two bytes of output).
-__global__ void QuantizeInt4Kernel(const bf16* __restrict__ w, int rows, int cols,
+// One thread per group: find the value with the largest magnitude (the first one on ties, like
+// torch.argmax), derive the scale, write group / 2 bytes of nibbles and one fp16 scale.
+__global__ void QuantizeInt4Kernel(const bf16* __restrict__ w, long long groups, int group,
                                    uint8_t* __restrict__ q, __half* __restrict__ scales) {
-  const int groups_per_row = cols / kInt4Group;
-  const long long g = static_cast<long long>(blockIdx.x) * (blockDim.x / 32) + threadIdx.x / 32;
-  if (g >= static_cast<long long>(rows) * groups_per_row) return;
-  const int lane = threadIdx.x % 32;
-  const bf16* src = w + g * kInt4Group + lane * 4;
-
-  float v[4];
-  for (int i = 0; i < 4; ++i) v[i] = __bfloat162float(src[i]);
-
-  // The signed value with the largest magnitude in the group; on equal magnitudes the lowest
-  // index wins (as torch.argmax does), which matters when m and -m both occur.
-  float best = v[0];
-  int best_idx = lane * 4;
-  for (int i = 1; i < 4; ++i) {
-    if (fabsf(v[i]) > fabsf(best)) {
-      best = v[i];
-      best_idx = lane * 4 + i;
-    }
-  }
-#pragma unroll
-  for (int o = 16; o > 0; o >>= 1) {
-    const float other = __shfl_xor_sync(0xffffffffu, best, o);
-    const int other_idx = __shfl_xor_sync(0xffffffffu, best_idx, o);
-    if (fabsf(other) > fabsf(best) || (fabsf(other) == fabsf(best) && other_idx < best_idx)) {
-      best = other;
-      best_idx = other_idx;
-    }
+  const long long g = static_cast<long long>(blockIdx.x) * blockDim.x + threadIdx.x;
+  if (g >= groups) return;
+  const bf16* src = w + g * group;
+  float best = __bfloat162float(src[0]);
+  for (int i = 1; i < group; ++i) {
+    const float v = __bfloat162float(src[i]);
+    if (fabsf(v) > fabsf(best)) best = v;
   }
   const float scale = best != 0.0f ? best / -8.0f : 1.0f;
-  if (lane == 0) scales[g] = __float2half(scale);
-
-  uint8_t* dst = q + g * (kInt4Group / 2) + lane * 2;
-  unsigned int nib[4];
-  for (int i = 0; i < 4; ++i) {
-    const float qv = fminf(fmaxf(rintf(v[i] / scale), -8.0f), 7.0f);
-    nib[i] = static_cast<unsigned int>(static_cast<int>(qv) + 8);
+  scales[g] = __float2half(scale);
+  uint8_t* dst = q + g * (group / 2);
+  for (int i = 0; i < group; i += 2) {
+    const float a = fminf(fmaxf(rintf(__bfloat162float(src[i]) / scale), -8.0f), 7.0f);
+    const float b = fminf(fmaxf(rintf(__bfloat162float(src[i + 1]) / scale), -8.0f), 7.0f);
+    dst[i / 2] = static_cast<uint8_t>(static_cast<unsigned int>(static_cast<int>(a) + 8) |
+                                      (static_cast<unsigned int>(static_cast<int>(b) + 8) << 4));
   }
-  dst[0] = static_cast<uint8_t>(nib[0] | (nib[1] << 4));
-  dst[1] = static_cast<uint8_t>(nib[2] | (nib[3] << 4));
 }
 
 }  // namespace
@@ -108,14 +88,16 @@ void QuantizeInt8(const bf16* w, int rows, int cols, int8_t* q, float* scales,
   CUDA_CHECK_LAUNCH();
 }
 
-void QuantizeInt4(const bf16* w, int rows, int cols, uint8_t* q, __half* scales,
+void QuantizeInt4(const bf16* w, int rows, int cols, int group, uint8_t* q, __half* scales,
                   cudaStream_t stream) {
-  if (cols % kInt4Group != 0) throw CudaError("int4: cols must be a multiple of 128");
-  const long long groups = static_cast<long long>(rows) * (cols / kInt4Group);
-  const int warps_per_block = kThreads / 32;
-  const long long blocks = (groups + warps_per_block - 1) / warps_per_block;
-  QuantizeInt4Kernel<<<static_cast<unsigned int>(blocks), kThreads, 0, stream>>>(w, rows, cols, q,
-                                                                                 scales);
+  if (group != 32 && group != 64 && group != 128) {
+    throw CudaError("int4: group must be 32, 64 or 128");
+  }
+  if (cols % group != 0) throw CudaError("int4: cols must be a multiple of the group size");
+  const long long groups = static_cast<long long>(rows) * (cols / group);
+  const long long blocks = (groups + kThreads - 1) / kThreads;
+  QuantizeInt4Kernel<<<static_cast<unsigned int>(blocks), kThreads, 0, stream>>>(w, groups, group,
+                                                                                 q, scales);
   CUDA_CHECK_LAUNCH();
 }
 
