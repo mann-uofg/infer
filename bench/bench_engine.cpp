@@ -151,8 +151,9 @@ double TimeMs(cudaStream_t stream, Fn fn) {
 }  // namespace
 
 int main(int argc, char** argv) {
-  const Args args = ParseArgs(argc, argv);
   try {
+    // Inside the try: std::stoi throws on input like "--generate abc".
+    const Args args = ParseArgs(argc, argv);
     const infer::ModelConfig cfg = infer::ModelConfig::FromJsonFile(
         (std::filesystem::path(args.model) / "config.json").string());
     const infer::Weights weights = infer::Weights::Load(args.model, cfg, args.load);
