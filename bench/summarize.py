@@ -29,8 +29,9 @@ def main() -> None:
         ("infer bf16, no CUDA graph", f"{prefix}-engine-bf16-nograph"),
         ("infer bf16", f"{prefix}-engine-bf16"),
         ("infer int8", f"{prefix}-engine-int8"),
-        ("infer int4 (int8 LM head)", f"{prefix}-engine-int4-int8head"),
-        ("infer int4", f"{prefix}-engine-int4"),
+        ("infer int4 g32, int8 LM head", f"{prefix}-engine-int4-int8head"),
+        ("infer int4 g32", f"{prefix}-engine-int4"),
+        ("infer int4 g128", f"{prefix}-engine-int4-g128"),
     ]
     contexts = [128, 512, 2048]
     out.append(f"Decode, batch 1, 128 new tokens after a prompt of the given length. "
@@ -68,7 +69,7 @@ def main() -> None:
     out.append("|---|" + "---:|" * len(contexts))
     for name, f in engines:
         rows = {r["context"]: r for r in jsonl(results / f"{f}.jsonl")}
-        if rows and "nograph" not in f and "int8head" not in f:
+        if rows and "nograph" not in f and "int8head" not in f and "g128" not in f:
             cells = [f"{rows[c]['prefill_tok_s']:.0f} ({rows[c]['ttft_ms_median']:.0f} ms)"
                      for c in contexts if c in rows]
             out.append(f"| {name} | " + " | ".join(cells) + " |")
@@ -121,6 +122,34 @@ def main() -> None:
             cell = lambda k: f"{v[k]['tflops']:.1f}" if k in v else ""
             out.append(f"| {name} | {cell('naive')} | {cell('tiled')} | {cell('cublas-f32')} | "
                        f"{cell('cublas-bf16')} |")
+    # ---- Perplexity (only for runs on the real checkpoint) ----
+    ppl_rows = [
+        ("transformers fp32", "hf-float32", r"perplexity ([0-9.]+)"),
+        ("transformers bf16", "hf-bfloat16", r"perplexity ([0-9.]+)"),
+        ("infer bf16", "bf16", r"perplexity ([0-9.]+ \+/- [0-9.]+)"),
+        ("llama.cpp BF16", "llamacpp-bf16", r"PPL = ([0-9.]+ \+/- [0-9.]+)"),
+        ("infer int8 (per row)", "int8", r"perplexity ([0-9.]+ \+/- [0-9.]+)"),
+        ("llama.cpp Q8_0 (blocks of 32)", "llamacpp-Q8_0", r"PPL = ([0-9.]+ \+/- [0-9.]+)"),
+        ("infer int4 g32, int8 LM head", "int4-g32-int8head", r"perplexity ([0-9.]+ \+/- [0-9.]+)"),
+        ("llama.cpp Q4_0 (blocks of 32, Q6_K head)", "llamacpp-Q4_0", r"PPL = ([0-9.]+ \+/- [0-9.]+)"),
+        ("infer int4 g32", "int4-g32", r"perplexity ([0-9.]+ \+/- [0-9.]+)"),
+        ("infer int4 g64", "int4-g64", r"perplexity ([0-9.]+ \+/- [0-9.]+)"),
+        ("infer int4 g128", "int4-g128", r"perplexity ([0-9.]+ \+/- [0-9.]+)"),
+        ("infer int4 g128, int8 LM head", "int4-g128-int8head", r"perplexity ([0-9.]+ \+/- [0-9.]+)"),
+    ]
+    found = []
+    for name, f, pattern in ppl_rows:
+        path = results / f"{prefix}-ppl-{f}.txt"
+        if path.exists():
+            m = re.findall(pattern, path.read_text())
+            if m:
+                found.append(f"| {name} | {m[-1].replace('+/-', '±')} |")
+    if found:
+        out.append("\nPerplexity, WikiText-2 test (raw), chunks of 512 tokens scoring the second half "
+                   "of each (llama.cpp's method), 564 chunks, 143,820 scored tokens:\n")
+        out.append("| model | perplexity |")
+        out.append("|---|---:|")
+        out.extend(found)
     print("\n".join(out))
 
 

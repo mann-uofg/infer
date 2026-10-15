@@ -1,0 +1,4 @@
+model models/llama-3.2-1b, bf16 weights, 564 chunks of 512 tokens, scoring 255 tokens per chunk
+tokens scored 143820
+mean nll 2.321335
+perplexity 10.1893 +/- 0.0704

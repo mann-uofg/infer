@@ -1,0 +1,4 @@
+model models/llama-3.2-1b, int4 weights, 564 chunks of 512 tokens, scoring 255 tokens per chunk
+tokens scored 143820
+mean nll 2.452701
+perplexity 11.6197 +/- 0.0819

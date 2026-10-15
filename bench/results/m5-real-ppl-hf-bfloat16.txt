@@ -1,0 +1,1 @@
+transformers bfloat16: tokens scored 143820, mean nll 2.322011, perplexity 10.1962

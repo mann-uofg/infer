@@ -1,0 +1,66 @@
+date          2026-10-15T16:28Z
+commit        d7ad959+dirty
+gpu           NVIDIA GeForce RTX 5070 Ti, driver 617.42
+toolkit       release 13.3
+host          WSL2 6.18.54.1-microsoft-standard-WSL2
+clocks before sm 2947 MHz / mem 14201 MHz (max sm 3090 MHz, not locked)
+gpu before    37 C, 81.13 W, 658 MiB in use
+command       bench_kernels --peak-gbps 846.3
+
+kernel                       variant       time us       GB/s   % peak
+gemv qkv 3072x2048           naive           188.5       66.9      7.9
+gemv qkv 3072x2048           optimized        15.9      793.7     93.8
+gemv qkv 3072x2048           int8              9.0      701.6     82.9
+gemv qkv 3072x2048           int4              8.1      439.5     51.9
+gemv o 2048x2048             naive           191.6       43.9      5.2
+gemv o 2048x2048             optimized        11.0      763.0     90.2
+gemv o 2048x2048             int8              7.2      582.6     68.8
+gemv o 2048x2048             int4              6.2      381.9     45.1
+gemv gate_up 16384x2048      naive           244.5      274.8     32.5
+gemv gate_up 16384x2048      optimized        83.2      807.8     95.5
+gemv gate_up 16384x2048      int8             40.9      823.8     97.3
+gemv gate_up 16384x2048      int4             24.5      773.3     91.4
+gemv down 2048x8192          naive           761.8       44.1      5.2
+gemv down 2048x8192          optimized        41.4      811.7     95.9
+gemv down 2048x8192          int8             22.1      761.4     90.0
+gemv down 2048x8192          int4             14.2      668.0     78.9
+gemv lm_head 128256x2048     naive          2105.0      249.8     29.5
+gemv lm_head 128256x2048     optimized       631.5      832.7     98.4
+gemv lm_head 128256x2048     int8            316.6      833.0     98.4
+gemv lm_head 128256x2048     int4            162.0      915.5    108.2
+rmsnorm H=2048               naive            78.9        0.3      0.0
+attention decode ctx=512     naive          1580.8        0.7      0.1
+attention decode ctx=512     split8            5.6      190.3     22.5
+attention decode ctx=512     split16           5.5      195.6     23.1
+attention decode ctx=512     split32           7.6      140.5     16.6
+attention decode ctx=512     split64          11.4       93.9     11.1
+attention decode ctx=2048    naive          6346.9        0.7      0.1
+attention decode ctx=2048    split8           13.2      320.0     37.8
+attention decode ctx=2048    split16          11.0      382.8     45.2
+attention decode ctx=2048    split32          12.5      337.3     39.9
+attention decode ctx=2048    split64          14.7      286.8     33.9
+rope                         naive             1.2       16.4      1.9
+swiglu I=8192                naive             0.9      108.9     12.9
+sample T=0.6 p=0.9           radix           158.0        3.2      0.4
+sample T=1 k=40              radix           150.0        3.4      0.4
+sample T=1 k=40 p=0.95       radix           193.3        2.7      0.3
+argmax V=128256              multiblock        1.5      349.7     41.3
+argmax V=128256              naive            19.7       26.0      3.1
+gemm qkv T=128               naive          4439.2        0.4 TFLOPS
+gemm qkv T=128               tiled           126.2       12.8 TFLOPS
+gemm qkv T=128               cublas-f32      101.2       15.9 TFLOPS
+gemm qkv T=128               cublas-bf16       20.4       79.1 TFLOPS
+gemm qkv T=2048              tiled          1196.4       21.5 TFLOPS
+gemm qkv T=2048              cublas-f32      977.1       26.4 TFLOPS
+gemm qkv T=2048              cublas-bf16      288.5       89.3 TFLOPS
+gemm o T=2048                tiled           796.4       21.6 TFLOPS
+gemm o T=2048                cublas-f32      673.8       25.5 TFLOPS
+gemm o T=2048                cublas-bf16      192.6       89.2 TFLOPS
+gemm gate_up T=2048          tiled          5998.5       22.9 TFLOPS
+gemm gate_up T=2048          cublas-f32     4926.4       27.9 TFLOPS
+gemm gate_up T=2048          cublas-bf16     1470.8       93.4 TFLOPS
+gemm down T=2048             tiled          2998.9       22.9 TFLOPS
+gemm down T=2048             cublas-f32     2490.4       27.6 TFLOPS
+gemm down T=2048             cublas-bf16      732.9       93.8 TFLOPS
+
+clocks after  sm 2835 MHz / mem 14201 MHz

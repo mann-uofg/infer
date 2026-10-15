@@ -1,0 +1,3 @@
+{"engine": "transformers", "attn": "sdpa", "context": 128, "generate": 128, "runs": 5, "ttft_ms_median": 10.664825000276323, "decode_tok_s_median": 90.16469090080598, "decode_tok_s_min": 83.68330098414474, "decode_tok_s_max": 97.97880562893023}
+{"engine": "transformers", "attn": "sdpa", "context": 512, "generate": 128, "runs": 5, "ttft_ms_median": 18.630021999797464, "decode_tok_s_median": 83.74426666796073, "decode_tok_s_min": 75.02637275181355, "decode_tok_s_max": 100.05435718722832}
+{"engine": "transformers", "attn": "sdpa", "context": 2048, "generate": 128, "runs": 5, "ttft_ms_median": 70.78740199995082, "decode_tok_s_median": 83.2348926288015, "decode_tok_s_min": 76.9508823197419, "decode_tok_s_max": 88.11604739150958}

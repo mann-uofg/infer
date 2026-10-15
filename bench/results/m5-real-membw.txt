@@ -1,0 +1,41 @@
+date          2026-10-15T16:28Z
+commit        d7ad959+dirty
+gpu           NVIDIA GeForce RTX 5070 Ti, driver 617.42
+toolkit       release 13.3
+host          WSL2 6.18.54.1-microsoft-standard-WSL2
+clocks before sm 1132 MHz / mem 405 MHz (max sm 3090 MHz, not locked)
+gpu before    35 C, 18.50 W, 628 MiB in use
+command       membw 
+
+device        NVIDIA GeForce RTX 5070 Ti (70 SMs, L2 48 MiB, bus 256 bits)
+buffer        2048 MiB, 20 timed runs after 5 warmups
+
+test        threads     median        min        max
+                          GB/s       GB/s       GB/s
+read          17920      698.7      612.4      727.1
+write         17920      819.1      691.9      832.1
+copy          17920      722.3      684.1      727.5
+read          35840      803.9      699.1      855.1
+write         35840      798.9      684.7      837.0
+copy          35840      733.2      693.4      738.4
+read          71680      839.8      775.3      860.9
+write         71680      803.4      741.1      831.4
+copy          71680      736.3      697.8      740.9
+read         143360      846.3      679.0      854.9
+write        143360      783.6      715.5      829.1
+copy         143360      731.0      686.8      735.7
+read         286720      841.2      678.6      856.9
+write        286720      780.7      648.7      824.9
+copy         286720      730.3      671.8      764.0
+read         573440      836.4      674.8      855.1
+write        573440      806.3      668.3      828.5
+copy         573440      729.3      685.1      759.1
+read        1146880      844.3      682.2      858.0
+write       1146880      811.4      660.5      834.1
+copy        1146880      735.8      730.0      763.5
+memset            -      832.3      686.9      847.1
+memcpy            -      748.0      706.5      750.7
+
+best median   read 846.3 GB/s, write 819.1 GB/s, copy 736.3 GB/s
+
+clocks after  sm 2947 MHz / mem 14201 MHz

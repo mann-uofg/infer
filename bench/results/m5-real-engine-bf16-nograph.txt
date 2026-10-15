@@ -1,0 +1,19 @@
+date          2026-10-15T16:33Z
+commit        d7ad959+dirty
+gpu           NVIDIA GeForce RTX 5070 Ti, driver 617.42
+toolkit       release 13.3
+host          WSL2 6.18.54.1-microsoft-standard-WSL2
+clocks before sm 2940 MHz / mem 14201 MHz (max sm 3090 MHz, not locked)
+gpu before    43 C, 57.51 W, 970 MiB in use
+command       bench_engine --model models/llama-3.2-1b --contexts 128,512,2048 --generate 128 --runs 5 --peak-gbps 846.3 --label bf16-nograph --graph off
+
+model     models/llama-3.2-1b, bf16 weights (2.472 GB read per decode step, excluding KV cache)
+device    NVIDIA GeForce RTX 5070 Ti
+backend   optimized, 1 warmup + 5 timed runs, 128 decode steps per run
+
+context |    TTFT ms  prefill/s | decode tok/s (range) |      GB/s  % peak
+    128 |      19.86       6446 |   293.8 (293.6-303.1) |     728.0    86.0
+    512 |      55.28       9261 |   291.5 (290.7-303.8) |     726.0    85.8
+   2048 |     218.29       9382 |   280.1 (280.0-289.1) |     711.6    84.1
+
+clocks after  sm 2925 MHz / mem 14201 MHz

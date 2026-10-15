@@ -1,0 +1,5 @@
+transformers, bf16, attention=sdpa, 1 warmup + 5 runs
+context |    TTFT ms |   decode tok/s (range)
+    128 |      10.66 |    90.2 ( 83.7- 98.0)
+    512 |      18.63 |    83.7 ( 75.0-100.1)
+   2048 |      70.79 |    83.2 ( 77.0- 88.1)
