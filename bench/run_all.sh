@@ -17,8 +17,9 @@ cd "$repo"
 py="${PYTHON:-$HOME/venvs/infer/bin/python}"
 
 busy=$(nvidia-smi --query-gpu=utilization.gpu --format=csv,noheader,nounits | head -1)
-if [ "$busy" -gt 10 ]; then
-  echo "GPU is ${busy}% busy; close whatever is using it and try again." >&2
+limit=${GPU_BUSY_LIMIT:-10}
+if [ "$busy" -gt "$limit" ]; then
+  echo "GPU is ${busy}% busy (limit ${limit}); close whatever is using it and try again." >&2
   exit 1
 fi
 
