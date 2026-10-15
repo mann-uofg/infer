@@ -16,12 +16,16 @@ constexpr int kThreads = 256;
 
 int Blocks(long long n) { return static_cast<int>((n + kThreads - 1) / kThreads); }
 
-__global__ void EmbeddingKernel(const bf16* table, const int* tokens, int H, float* out) {
+__global__ void EmbeddingKernel(const bf16* table, int V, const int* tokens, int H, float* out) {
   const int t = blockIdx.x;
-  const bf16* row = table + static_cast<size_t>(tokens[t]) * H;
-  for (int k = threadIdx.x; k < H; k += blockDim.x) {
-    out[static_cast<size_t>(t) * H + k] = __bfloat162float(row[k]);
+  const int token = tokens[t];
+  float* dst = out + static_cast<size_t>(t) * H;
+  if (token < 0 || token >= V) {
+    for (int k = threadIdx.x; k < H; k += blockDim.x) dst[k] = 0.0f;
+    return;
   }
+  const bf16* row = table + static_cast<size_t>(token) * H;
+  for (int k = threadIdx.x; k < H; k += blockDim.x) dst[k] = __bfloat162float(row[k]);
 }
 
 __global__ void RmsNormNaiveKernel(const float* x, const bf16* w, int T, int H, float eps,
@@ -181,9 +185,9 @@ __global__ void ArgmaxKernel(const float* logits, int V, int* out) {
 
 }  // namespace
 
-void Embedding(const bf16* table, const int* tokens, int T, int H, float* out,
+void Embedding(const bf16* table, int V, const int* tokens, int T, int H, float* out,
                cudaStream_t stream) {
-  EmbeddingKernel<<<T, kThreads, 0, stream>>>(table, tokens, H, out);
+  EmbeddingKernel<<<T, kThreads, 0, stream>>>(table, V, tokens, H, out);
   CUDA_CHECK_LAUNCH();
 }
 

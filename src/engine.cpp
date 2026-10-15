@@ -93,7 +93,7 @@ void Engine::RunPrefill(int T, bool all_logits, std::vector<std::vector<float>>*
     }
   };
 
-  k::Embedding(w_.embed, tokens_.get(), T, H, x_.get(), stream_);
+  k::Embedding(w_.embed, cfg_.vocab_size, tokens_.get(), T, H, x_.get(), stream_);
   dump();
 
   for (int i = 0; i < cfg_.num_layers; ++i) {
@@ -144,7 +144,7 @@ void Engine::EnqueueDecodeStepNaive() {
   const int H = cfg_.hidden_size;
   const int I = cfg_.intermediate_size;
   const float eps = cfg_.rms_norm_eps;
-  k::Embedding(w_.embed, token_.get(), 1, H, x_.get(), stream_);
+  k::Embedding(w_.embed, cfg_.vocab_size, token_.get(), 1, H, x_.get(), stream_);
   for (int i = 0; i < cfg_.num_layers; ++i) {
     const LayerWeights& l = w_.layers[static_cast<size_t>(i)];
     k::RmsNormNaive(x_.get(), l.attn_norm, 1, H, eps, h_.get(), stream_);
@@ -172,7 +172,7 @@ void Engine::EnqueueDecodeStepNaive() {
 void Engine::EnqueueDecodeStep() {
   const int H = cfg_.hidden_size;
   const float eps = cfg_.rms_norm_eps;
-  k::Embedding(w_.embed, token_.get(), 1, H, x_.get(), stream_);
+  k::Embedding(w_.embed, cfg_.vocab_size, token_.get(), 1, H, x_.get(), stream_);
   for (int i = 0; i < cfg_.num_layers; ++i) {
     const LayerWeights& l = w_.layers[static_cast<size_t>(i)];
     // qkv = Wqkv * norm(x)

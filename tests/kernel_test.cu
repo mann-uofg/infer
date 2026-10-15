@@ -28,10 +28,28 @@ TEST(KernelTest, Embedding) {
   auto d_table = Upload(ToBf16(table));
   auto d_tokens = Upload(tokens);
   DeviceBuffer<float> d_out(T * H);
-  kernels::Embedding(d_table.get(), d_tokens.get(), T, H, d_out.get(), nullptr);
+  kernels::Embedding(d_table.get(), V, d_tokens.get(), T, H, d_out.get(), nullptr);
   const auto out = Download(d_out);
   for (int t = 0; t < T; ++t) {
     for (int k = 0; k < H; ++k) ASSERT_EQ(out[t * H + k], table[tokens[t] * H + k]);
+  }
+}
+
+TEST(KernelTest, EmbeddingRejectsOutOfRangeTokens) {
+  // A bad token from the GPU (say, -1 from a sampler fed NaN logits) must not read outside the
+  // table; it gets a row of zeros.
+  const int V = 50, H = 72;
+  const auto table = RoundTripBf16(RandomFloats(V * H, 1.0f, 1));
+  const std::vector<int> tokens = {-1, V, 7};
+  auto d_table = Upload(ToBf16(table));
+  auto d_tokens = Upload(tokens);
+  DeviceBuffer<float> d_out(3 * H);
+  kernels::Embedding(d_table.get(), V, d_tokens.get(), 3, H, d_out.get(), nullptr);
+  const auto out = Download(d_out);
+  for (int k = 0; k < H; ++k) {
+    ASSERT_EQ(out[k], 0.0f);
+    ASSERT_EQ(out[H + k], 0.0f);
+    ASSERT_EQ(out[2 * H + k], table[7 * H + k]);
   }
 }
 

@@ -53,8 +53,10 @@ void QuantizeInt8(const bf16* w, int rows, int cols, int8_t* q, float* scales, c
 void QuantizeInt4(const bf16* w, int rows, int cols, int group, uint8_t* q, __half* scales,
                   cudaStream_t stream);
 
-// out[t, :] = table[tokens[t], :]
-void Embedding(const bf16* table, const int* tokens, int T, int H, float* out, cudaStream_t stream);
+// out[t, :] = table[tokens[t], :]. A token outside [0, V) gives a row of zeros instead of an
+// out-of-bounds read: tokens produced on the GPU (argmax, sampling) are not checked by the host.
+void Embedding(const bf16* table, int V, const int* tokens, int T, int H, float* out,
+               cudaStream_t stream);
 
 // out[t, :] = x[t, :] / sqrt(mean(x[t, :]^2) + eps) * w
 // Naive: one thread per row.
