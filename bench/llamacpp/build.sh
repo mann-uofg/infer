@@ -8,6 +8,9 @@
 set -euo pipefail
 
 TAG="${LLAMACPP_TAG:-v0.6.0}"
+# The commit that tag pointed to when the results were taken. Tags can be moved; the build
+# refuses to run if the tag now names a different commit (override both to build another).
+COMMIT="${LLAMACPP_COMMIT:-d81235049384534c167caea52b85a694f6103d14}"
 DIR="${1:-$HOME/src/llama.cpp}"
 
 if [ ! -d "$DIR/.git" ]; then
@@ -15,6 +18,11 @@ if [ ! -d "$DIR/.git" ]; then
 fi
 git -C "$DIR" fetch --depth 1 origin tag "$TAG"
 git -C "$DIR" checkout -q "$TAG"
+actual=$(git -C "$DIR" rev-parse HEAD)
+if [ "$actual" != "$COMMIT" ]; then
+  echo "llama.cpp $TAG is $actual, expected $COMMIT; refusing to build." >&2
+  exit 1
+fi
 
 # Only this GPU's architecture, to keep the build short.
 cmake -S "$DIR" -B "$DIR/build" -G Ninja -DCMAKE_BUILD_TYPE=Release -DGGML_CUDA=ON \
