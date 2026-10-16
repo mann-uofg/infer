@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Profiles one decode step of the engine.
 #
-#   bench/profile_decode.sh MODEL_DIR BACKEND LABEL [CONTEXT]
+#   bench/profile_decode.sh MODEL_DIR BACKEND LABEL [CONTEXT [ENGINE FLAGS...]]
+#   e.g. bench/profile_decode.sh models/llama-3.2-1b optimized int4 512 --weights int4
 #
 # Writes to bench/results/profiles/:
 #   LABEL-ncu.csv     Nsight Compute metrics for every kernel launched in the step
@@ -24,7 +25,8 @@ repo=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 out="$repo/bench/results/profiles"
 bin="$repo/build/release/bench_engine"
 mkdir -p "$out"
-args=(--model "$model" --backend "$backend" --contexts "$ctx" --profile-step)
+shift $(( $# < 4 ? $# : 4 ))
+args=(--model "$model" --backend "$backend" --contexts "$ctx" --profile-step "$@")
 
 # Both tools write SQLite or temp files that do not work reliably on a Windows drive mounted
 # in WSL, so everything is produced in a local temp directory and copied over.
@@ -38,14 +40,10 @@ nsys profile --trace=cuda,nvtx --cuda-graph-trace=node --capture-range=cudaProfi
 nsys stats --force-export=true --report cuda_gpu_kern_sum --format table \
   "$work/$label.nsys-rep" > "$out/$label-nsys.txt" 2> "$work/stats.log" || { cat "$work/stats.log"; exit 1; }
 
-metrics=gpu__time_duration.sum,dram__bytes_read.sum,dram__bytes_write.sum
-metrics+=,dram__throughput.avg.pct_of_peak_sustained_elapsed
-metrics+=,sm__throughput.avg.pct_of_peak_sustained_elapsed
-metrics+=,sm__warps_active.avg.pct_of_peak_sustained_active
-metrics+=,launch__grid_size,launch__block_size,launch__registers_per_thread
-
-if ! ncu --profile-from-start off --clock-control none --metrics "$metrics" \
-  --csv --page raw "$bin" "${args[@]}" > "$work/ncu.csv" 2> "$work/ncu.log"; then
+# One full Nsight Compute pass (every section, for the GUI), then the raw metrics of that same
+# report as CSV for bench/summarize_ncu.py.
+if ! ncu --profile-from-start off --clock-control none --set full --force-overwrite \
+  -o "$work/$label" "$bin" "${args[@]}" > "$work/ncu.log" 2>&1; then
   if grep -q ERR_NVGPUCTRPERM "$work/ncu.log"; then
     echo "Nsight Compute: no access to GPU performance counters (ERR_NVGPUCTRPERM)."
     echo "Enable them for all users in the NVIDIA Control Panel and re-run. Kept the nsys part:"
@@ -55,8 +53,8 @@ if ! ncu --profile-from-start off --clock-control none --metrics "$metrics" \
   cat "$work/ncu.log"
   exit 1
 fi
-ncu --profile-from-start off --clock-control none --set full --force-overwrite \
-  -o "$work/$label" "$bin" "${args[@]}" > "$work/ncu-full.log" 2>&1 || { cat "$work/ncu-full.log"; exit 1; }
+ncu --import "$work/$label.ncu-rep" --page raw --csv > "$work/ncu.csv" 2> "$work/import.log" \
+  || { cat "$work/import.log"; exit 1; }
 
 cp "$work/ncu.csv" "$out/$label-ncu.csv"
 cp "$work/$label.nsys-rep" "$work/$label.ncu-rep" "$out/"

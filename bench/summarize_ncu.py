@@ -11,9 +11,20 @@ import sys
 from collections import defaultdict
 
 
+GEMV_OUT = {"0": "store", "1": "+= residual", "2": "swiglu"}
+
+
 def short_name(name: str) -> str:
     # "void infer::kernels::(anonymous namespace)::MatmulNaiveKernel(const float *, ...)"
     # -> "MatmulNaiveKernel"; template arguments are kept.
+    # GemvKernel<Format, warps, rows, out> -> "Gemv bf16, swiglu, 2 rows/warp", because the
+    # output mode tells which projection it is (store: qkv and LM head, +=: o and down,
+    # swiglu: gate/up).
+    if "GemvKernel" in name:
+        args = name.split("GemvKernel")[1].split(">(")[0]
+        parts = [a.strip() for a in args.split(",")]
+        fmt = parts[0].split("::")[-1].replace("Format", "").lower()
+        return f"Gemv {fmt}, {GEMV_OUT.get(parts[3], parts[3])}, {parts[2]} rows/warp"
     name = name.split("(")[0] if "<" not in name.split("(")[0] else name.split(">(")[0] + ">"
     return name.split("::")[-1].replace("void ", "")
 
@@ -25,6 +36,14 @@ def main(path: str) -> None:
     # The second row holds units.
     units = rows[0]
     rows = [r for r in rows[1:] if r.get("Kernel Name")]
+
+    # DRAM byte counters are dram__bytes_op_read/write on Blackwell (the name ncu --query-metrics
+    # lists for this GPU) and dram__bytes_read/write on older architectures.
+    read_key = next(k for k in ("dram__bytes_op_read.sum", "dram__bytes_read.sum") if k in units)
+    write_key = next(k for k in ("dram__bytes_op_write.sum", "dram__bytes_write.sum") if k in units)
+    # The full section set reports DRAM throughput as gpu__dram_throughput.
+    dram_pct_key = next(k for k in ("gpu__dram_throughput.avg.pct_of_peak_sustained_elapsed",
+                                    "dram__throughput.avg.pct_of_peak_sustained_elapsed") if k in units)
 
     def num(r, key):
         v = r[key].replace(",", "")
@@ -42,9 +61,9 @@ def main(path: str) -> None:
         g = groups[short_name(r["Kernel Name"])]
         g["n"] += 1
         g["ns"] += num(r, "gpu__time_duration.sum") * scale_ns
-        g["read"] += num(r, "dram__bytes_read.sum") * byte_scale[units["dram__bytes_read.sum"]]
-        g["write"] += num(r, "dram__bytes_write.sum") * byte_scale[units["dram__bytes_write.sum"]]
-        g["dram_pct"].append(num(r, "dram__throughput.avg.pct_of_peak_sustained_elapsed"))
+        g["read"] += num(r, read_key) * byte_scale[units[read_key]]
+        g["write"] += num(r, write_key) * byte_scale[units[write_key]]
+        g["dram_pct"].append(num(r, dram_pct_key))
         g["sm_pct"].append(num(r, "sm__throughput.avg.pct_of_peak_sustained_elapsed"))
         g["occ"].append(num(r, "sm__warps_active.avg.pct_of_peak_sustained_active"))
         g["launch"] = (f'{int(num(r, "launch__grid_size"))}x{int(num(r, "launch__block_size"))}'
