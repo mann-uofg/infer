@@ -124,6 +124,31 @@ state at the start of each run, are in `bench/results/m5-real-*`; the same suite
 weights with the same shapes is in `bench/results/m5-random-*`.
 </details>
 
+## Profiler evidence
+
+Nsight Compute on one decode step of the real model at context 512 (`bench/profile_decode.sh`,
+summaries in `bench/results/profiles/m5-real-*-ncu.md`, full reports kept locally):
+
+| kernel | DRAM throughput, % of peak | SM throughput, % of peak | achieved occupancy | registers |
+|---|---:|---:|---:|---:|
+| naive matmul (all projections) | 13.7% | 3.3% | 17.5% | 39 |
+| naive attention | 0.5% | 0.1% | 2.1% | 167 |
+| GEMV bf16, gate/up + SwiGLU | 92.9% | 7.7% | 73% | 44 |
+| GEMV bf16, o and down (+= residual) | 82.6% | 6.0% | 53% | 40 |
+| GEMV bf16, qkv and LM head | 80.2% | 7.7% | 42% | 44 |
+| split-KV decode attention | 29.1% | 21.7% | 15% | 51 |
+| GEMV int4, gate/up + SwiGLU | 81.5% | 18.3% | 31% | 86 |
+| GEMV int4, o and down | 58.7% | 10.4% | 17% | 86 |
+
+How to read it: the optimized GEMVs keep DRAM 80-93% busy while the SMs sit at ~7%, which is
+what a memory-bound kernel that is doing its job looks like. The naive kernels have both low:
+they are neither moving bytes nor computing, they are waiting (uncoalesced loads, one thread
+per row). The int4 GEMV spends more SM time unpacking and runs at 86 registers per thread,
+which allows 2 blocks per SM; capping it at 85 registers for a third block was measured and made
+no difference, so the remaining int4 gap is instruction count and staging the input vector
+per block, not occupancy. Nsight Compute replays each kernel with cold caches, so its times are
+not comparable with the benchmark's; the percentages are the point.
+
 ## Why bandwidth is the number that matters
 
 At batch size 1, generating a token reads every weight once and does one multiply-add with
